@@ -18,6 +18,9 @@ type ExtensionPanelProps = {
   onClick?: () => void;
   children?: JSX.Element | JSX.Element[];
   indicatorColor?: string;
+  panelClass?: string;
+  contentClass?: string;
+  buttonClass?: string;
 };
 
 /**
@@ -30,11 +33,19 @@ export function ExtensionPanel({
   onClick,
   active,
   indicatorColor = 'bg-secondary',
+  panelClass,
+  contentClass,
+  buttonClass,
 }: ExtensionPanelProps) {
   return (
-    <section class="module-panel">
+    <section
+      class={cx(
+        'module-panel -ml-2 overflow-visible pl-2 transition-colors duration-150',
+        panelClass,
+      )}
+    >
       {/* Card contents. */}
-      <div class="h-12 flex items-center justify-start">
+      <div class={cx('h-12 flex items-center justify-start', contentClass)}>
         <div class="relative flex h-4 w-4 mr-3 shrink-0">
           {active && (
             <span
@@ -50,7 +61,7 @@ export function ExtensionPanel({
           <p class="text-base m-0 font-medium leading-none">{title}</p>
           <p class="text-sm text-base-content leading-5 text-opacity-70 m-0">{description}</p>
         </div>
-        <button class="btn btn-sm p-0 w-9 h-9" onClick={onClick}>
+        <button class={cx('btn btn-sm p-0 w-9 h-9', buttonClass)} onClick={onClick}>
           <IconArrowUpRight />
         </button>
       </div>
@@ -68,27 +79,47 @@ type ModalProps = {
   children?: JSX.Element | JSX.Element[];
   title?: string;
   class?: string;
+  fullscreen?: boolean;
 };
 
 /**
  * Common template for modals.
  */
-export function Modal({ show, onClose, title, children, class: className }: ModalProps) {
+export function Modal({
+  show,
+  onClose,
+  title,
+  children,
+  class: className,
+  fullscreen,
+}: ModalProps) {
   if (!show) {
     return <dialog class="modal" />;
   }
 
   return (
-    <dialog class="modal modal-open" open>
-      <div class={cx('modal-box p-3 flex flex-col', className)}>
-        <header class="flex items-center h-9 mb-2">
+    <dialog class={cx('modal modal-open z-[6000]', fullscreen && '!p-0')} open>
+      <div
+        class={cx(
+          'modal-box p-3 flex min-h-0 flex-col',
+          fullscreen &&
+            'h-screen w-screen max-h-screen max-w-none rounded-none border-0 p-0 shadow-none',
+          className,
+        )}
+      >
+        <header
+          class={cx(
+            'flex items-center h-8 mb-1.5',
+            fullscreen && 'mb-0 h-11 border-b border-base-300 px-3',
+          )}
+        >
           <div
             onClick={onClose}
-            class="w-9 h-9 mr-2 cursor-pointer flex justify-center items-center transition-colors duration-200 rounded-full hover:bg-base-200"
+            class="w-8 h-8 mr-2 cursor-pointer flex justify-center items-center transition-colors duration-200 rounded-full hover:bg-base-200"
           >
             <IconX />
           </div>
-          <h2 class="leading-none text-xl m-0 font-semibold">{title}</h2>
+          <h2 class="leading-none text-lg m-0 font-semibold tracking-[0.01em]">{title}</h2>
         </header>
         <ErrorBoundary>{children}</ErrorBoundary>
       </div>
@@ -141,10 +172,13 @@ type MultiSelectProps<T> = {
   options: { label: string; value: T }[];
   selected: T[];
   onChange: (value: T[]) => void;
+  placeholder?: string;
+  selectedSummary?: (count: number) => string;
 };
 
 export function MultiSelect<T extends string>(props: MultiSelectProps<T>) {
   const { options, selected, onChange } = props;
+  const selectedOptions = options.filter((option) => selected.includes(option.value));
 
   const onInputChange = (e: Event) => {
     const target = e.target as HTMLInputElement;
@@ -159,15 +193,17 @@ export function MultiSelect<T extends string>(props: MultiSelectProps<T>) {
     <div class={cx('dropdown', props.class)}>
       <div
         tabIndex={0}
-        class="input input-bordered input-sm flex flex-row items-center space-x-1 cursor-pointer"
+        class="input input-bordered input-sm flex flex-row items-center space-x-1 cursor-pointer min-h-9"
       >
-        {options
-          .filter((option) => selected.includes(option.value))
-          .map((option) => (
-            <div key={option.value} class="badge badge-accent select-none">
-              {option.label}
-            </div>
-          ))}
+        {selectedOptions.length ? (
+          <div class="min-w-0 truncate text-xs font-medium">
+            {props.selectedSummary
+              ? props.selectedSummary(selectedOptions.length)
+              : `${selectedOptions.length} selected`}
+          </div>
+        ) : (
+          <span class="text-xs opacity-60 select-none">{props.placeholder || 'Select...'}</span>
+        )}
       </div>
       <ul
         tabIndex={0}
@@ -213,6 +249,8 @@ export function MediaDisplayColumn({ data, onClick }: MediaDisplayColumnProps) {
             src={formatTwitterImage(media.media_url_https, 'thumb')}
             alt={media.ext_alt_text || ''}
             title={media.ext_alt_text || ''}
+            loading="lazy"
+            decoding="async"
           />
           {/* Show video duration or GIF. */}
           {media.type !== 'photo' && (

@@ -1,6 +1,6 @@
 import { createColumnHelper } from '@tanstack/table-core';
 import { IconLink } from '@tabler/icons-preact';
-import { formatDateTime, parseTwitterDateTime, strEntitiesToHTML } from '@/utils/common';
+import { formatDateTime, strEntitiesToHTML } from '@/utils/common';
 import { options } from '@/core/options';
 import { Trans } from '@/i18n';
 import { Tweet } from '@/types';
@@ -8,6 +8,7 @@ import {
   extractRetweetedTweet,
   extractTweetMedia,
   extractTweetUserScreenName,
+  extractTweetCreatedAtMs,
   formatTwitterImage,
   getMediaOriginalUrl,
   getProfileImageOriginalUrl,
@@ -21,32 +22,72 @@ import {
 import { MediaDisplayColumn } from '../common';
 
 const columnHelper = createColumnHelper<Tweet>();
+type DerivedTweetTableData = {
+  createdAtMs: number;
+  fullText: string;
+  media: ReturnType<typeof extractTweetMedia>;
+  mediaTags: ReturnType<typeof extractTweetMediaTags>;
+  retweetedTweet: ReturnType<typeof extractRetweetedTweet>;
+  quotedTweet: ReturnType<typeof extractQuotedTweet>;
+  bookmarkFolderName: string | null;
+  bookmarkFolderId: string | null;
+};
+
+const tweetTableDerivedCache = new WeakMap<Tweet, DerivedTweetTableData>();
+
+function getDerivedTweetTableData(row: Tweet): DerivedTweetTableData {
+  const cached = tweetTableDerivedCache.get(row);
+  if (cached) {
+    return cached;
+  }
+
+  const bookmarkFolderName = (() => {
+    const obj = row as unknown as Record<string, unknown>;
+    const source = obj.__bookmark_folder_name_source;
+    const name = obj.__bookmark_folder_name;
+    if (source === 'api' && typeof name === 'string' && name.trim()) return name;
+    return null;
+  })();
+
+  const bookmarkFolderId = (() => {
+    const id = (row as unknown as Record<string, unknown>).__bookmark_folder_id;
+    return typeof id === 'string' && id.trim() ? id : null;
+  })();
+
+  const derived: DerivedTweetTableData = {
+    createdAtMs:
+      typeof row.twe_private_fields?.created_at === 'number'
+        ? row.twe_private_fields.created_at
+        : extractTweetCreatedAtMs(row),
+    fullText: extractTweetFullText(row),
+    media: extractTweetMedia(row),
+    mediaTags: extractTweetMediaTags(row),
+    retweetedTweet: extractRetweetedTweet(row),
+    quotedTweet: extractQuotedTweet(row),
+    bookmarkFolderName,
+    bookmarkFolderId,
+  };
+
+  tweetTableDerivedCache.set(row, derived);
+  return derived;
+}
 
 // Extract the screen name of the retweeted tweet.
 const rtSourceAccessor = (row: Tweet) => {
-  const source = extractRetweetedTweet(row);
+  const source = getDerivedTweetTableData(row).retweetedTweet;
   return source ? extractTweetUserScreenName(source) : null;
 };
 
 // Extract the screen name of the quoted tweet.
 const quoteSourceAccessor = (row: Tweet) => {
-  const source = extractQuotedTweet(row);
+  const source = getDerivedTweetTableData(row).quotedTweet;
   return source ? extractTweetUserScreenName(source) : null;
 };
 
 // Folder names are trusted only when sourced from BookmarkFoldersSlice API.
-const bookmarkFolderNameAccessor = (row: Tweet) => {
-  const obj = row as unknown as Record<string, unknown>;
-  const source = obj.__bookmark_folder_name_source;
-  const name = obj.__bookmark_folder_name;
-  if (source === 'api' && typeof name === 'string' && name.trim()) return name;
-  return null;
-};
+const bookmarkFolderNameAccessor = (row: Tweet) => getDerivedTweetTableData(row).bookmarkFolderName;
 
-const bookmarkFolderIdAccessor = (row: Tweet) => {
-  const id = (row as unknown as Record<string, unknown>).__bookmark_folder_id;
-  return typeof id === 'string' && id.trim() ? id : null;
-};
+const bookmarkFolderIdAccessor = (row: Tweet) => getDerivedTweetTableData(row).bookmarkFolderId;
 
 /**
  * Table columns definition for tweets.
@@ -59,19 +100,33 @@ export const columns = [
       <input
         type="checkbox"
         class="checkbox checkbox-sm align-middle"
-        checked={table.getIsAllRowsSelected()}
-        indeterminate={table.getIsSomeRowsSelected()}
-        onChange={table.getToggleAllRowsSelectedHandler()}
+        checked={table.options.meta?.isAllResultRowsSelected?.() ?? table.getIsAllRowsSelected()}
+        indeterminate={
+          table.options.meta?.isSomeResultRowsSelected?.() ?? table.getIsSomeRowsSelected()
+        }
+        onChange={() => {
+          if (table.options.meta?.toggleAllResultRowsSelected) {
+            table.options.meta.toggleAllResultRowsSelected();
+            return;
+          }
+          table.toggleAllRowsSelected();
+        }}
       />
     ),
-    cell: ({ row }) => (
+    cell: ({ row, table }) => (
       <input
         type="checkbox"
         class="checkbox checkbox-sm"
-        checked={row.getIsSelected()}
+        checked={table.options.meta?.isResultRowSelected?.(row.id) ?? row.getIsSelected()}
         disabled={!row.getCanSelect()}
         indeterminate={row.getIsSomeSelected()}
-        onChange={row.getToggleSelectedHandler()}
+        onChange={() => {
+          if (table.options.meta?.toggleResultRowSelected) {
+            table.options.meta.toggleResultRowSelected(row.id);
+            return;
+          }
+          row.toggleSelected();
+        }}
       />
     ),
   }),
@@ -80,14 +135,14 @@ export const columns = [
     header: () => <Trans i18nKey="ID" />,
     cell: (info) => <p class="w-20 break-all font-mono text-xs">{info.getValue()}</p>,
   }),
-  columnHelper.accessor((row) => +parseTwitterDateTime(row.legacy.created_at), {
+  columnHelper.accessor((row) => getDerivedTweetTableData(row).createdAtMs, {
     id: 'created_at',
     meta: {
       exportKey: 'created_at',
       exportHeader: 'Date',
       exportValue: (row) =>
         formatDateTime(
-          parseTwitterDateTime(row.original.legacy.created_at),
+          getDerivedTweetTableData(row.original).createdAtMs,
           options.get('dateTimeFormat'),
         ),
     },
@@ -104,7 +159,7 @@ export const columns = [
     meta: {
       exportKey: 'full_text',
       exportHeader: 'Content',
-      exportValue: (row) => extractTweetFullText(row.original),
+      exportValue: (row) => getDerivedTweetTableData(row.original).fullText,
     },
     header: () => <Trans i18nKey="Content" />,
     cell: (info) => (
@@ -112,9 +167,9 @@ export const columns = [
         <p
           class="w-60 whitespace-pre-wrap"
           dangerouslySetInnerHTML={{
-            __html: strEntitiesToHTML(info.row.original.legacy.full_text, [
-              ...info.row.original.legacy.entities.urls,
-              ...(info.row.original.legacy.entities.media ?? []),
+            __html: strEntitiesToHTML(getDerivedTweetTableData(info.row.original).fullText, [
+              ...(info.row.original.legacy?.entities?.urls ?? []),
+              ...(info.row.original.legacy?.entities?.media ?? []),
             ]),
           }}
         />
@@ -123,7 +178,7 @@ export const columns = [
             class="link"
             onClick={() =>
               info.table.options.meta?.setRawDataPreview(
-                extractTweetFullText(info.row.original) as unknown as Tweet,
+                getDerivedTweetTableData(info.row.original).fullText as unknown as Tweet,
               )
             }
           >
@@ -133,13 +188,13 @@ export const columns = [
       </div>
     ),
   }),
-  columnHelper.accessor((row) => extractTweetMedia(row).length, {
+  columnHelper.accessor((row) => getDerivedTweetTableData(row).media.length, {
     id: 'media',
     meta: {
       exportKey: 'media',
       exportHeader: 'Media',
       exportValue: (row) =>
-        extractTweetMedia(row.original).map((media) => ({
+        getDerivedTweetTableData(row.original).media.map((media) => ({
           type: media.type,
           url: media.url,
           thumbnail: formatTwitterImage(media.media_url_https, 'thumb'),
@@ -150,7 +205,7 @@ export const columns = [
     header: () => <Trans i18nKey="Media" />,
     cell: (info) => (
       <MediaDisplayColumn
-        data={extractTweetMedia(info.row.original)}
+        data={getDerivedTweetTableData(info.row.original).media}
         onClick={(media) => info.table.options.meta?.setMediaPreview(getMediaOriginalUrl(media))}
       />
     ),
@@ -185,7 +240,7 @@ export const columns = [
           info.table.options.meta?.setMediaPreview(getProfileImageOriginalUrl(info.getValue()))
         }
       >
-        <img class="w-12 h-12 rounded" src={info.getValue()} />
+        <img class="w-12 h-12 rounded" src={info.getValue()} loading="lazy" decoding="async" />
       </div>
     ),
   }),
@@ -222,7 +277,7 @@ export const columns = [
     },
     header: () => <Trans i18nKey="RT Source" />,
     cell: (info) => {
-      const source = extractRetweetedTweet(info.row.original);
+      const source = getDerivedTweetTableData(info.row.original).retweetedTweet;
       return (
         <p class="whitespace-pre">
           {source ? (
@@ -245,7 +300,7 @@ export const columns = [
     },
     header: () => <Trans i18nKey="Quote Source" />,
     cell: (info) => {
-      const source = extractQuotedTweet(info.row.original);
+      const source = getDerivedTweetTableData(info.row.original).quotedTweet;
       return (
         <p class="whitespace-pre">
           {source ? (
@@ -264,13 +319,13 @@ export const columns = [
     meta: {
       exportKey: 'media_tags',
       exportHeader: 'Media Tags',
-      exportValue: (row) => extractTweetMediaTags(row.original),
+      exportValue: (row) => getDerivedTweetTableData(row.original).mediaTags,
     },
     header: () => <Trans i18nKey="Media Tags" />,
     cell: (info) => (
       <p>
-        {extractTweetMediaTags(info.row.original).length
-          ? extractTweetMediaTags(info.row.original).map((tag) => (
+        {getDerivedTweetTableData(info.row.original).mediaTags.length
+          ? getDerivedTweetTableData(info.row.original).mediaTags.map((tag) => (
               <a class="link inline-block" target="_blank" href={getUserURL(tag.screen_name)}>
                 @{tag.screen_name}
               </a>

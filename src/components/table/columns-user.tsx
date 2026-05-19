@@ -24,19 +24,33 @@ export const columns = [
       <input
         type="checkbox"
         class="checkbox checkbox-sm align-middle"
-        checked={table.getIsAllRowsSelected()}
-        indeterminate={table.getIsSomeRowsSelected()}
-        onChange={table.getToggleAllRowsSelectedHandler()}
+        checked={table.options.meta?.isAllResultRowsSelected?.() ?? table.getIsAllRowsSelected()}
+        indeterminate={
+          table.options.meta?.isSomeResultRowsSelected?.() ?? table.getIsSomeRowsSelected()
+        }
+        onChange={() => {
+          if (table.options.meta?.toggleAllResultRowsSelected) {
+            table.options.meta.toggleAllResultRowsSelected();
+            return;
+          }
+          table.toggleAllRowsSelected();
+        }}
       />
     ),
-    cell: ({ row }) => (
+    cell: ({ row, table }) => (
       <input
         type="checkbox"
         class="checkbox checkbox-sm"
-        checked={row.getIsSelected()}
+        checked={table.options.meta?.isResultRowSelected?.(row.id) ?? row.getIsSelected()}
         disabled={!row.getCanSelect()}
         indeterminate={row.getIsSomeSelected()}
-        onChange={row.getToggleSelectedHandler()}
+        onChange={() => {
+          if (table.options.meta?.toggleResultRowSelected) {
+            table.options.meta.toggleResultRowSelected(row.id);
+            return;
+          }
+          row.toggleSelected();
+        }}
       />
     ),
   }),
@@ -86,7 +100,7 @@ export const columns = [
           info.table.options.meta?.setMediaPreview(getProfileImageOriginalUrl(info.getValue()))
         }
       >
-        <img class="w-12 h-12 rounded" src={info.getValue()} />
+        <img class="w-12 h-12 rounded" src={info.getValue()} loading="lazy" decoding="async" />
       </div>
     ),
   }),
@@ -99,7 +113,12 @@ export const columns = [
         onClick={() => info.table.options.meta?.setMediaPreview(info.getValue() ?? '')}
       >
         {info.getValue() ? (
-          <img class="w-auto h-12 rounded" src={`${info.getValue()}/600x200`} />
+          <img
+            class="w-auto h-12 rounded"
+            src={`${info.getValue()}/600x200`}
+            loading="lazy"
+            decoding="async"
+          />
         ) : (
           <span class="leading-[48px]">N/A</span>
         )}
@@ -178,6 +197,47 @@ export const columns = [
     meta: { exportKey: 'followed_by', exportHeader: 'Follows You' },
     header: () => <Trans i18nKey="Follows You" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
+  }),
+  columnHelper.accessor((row) => row.twe_relationship_fields?.relation_types?.join(', ') || '', {
+    id: 'relation_types',
+    meta: { exportKey: 'relation_types', exportHeader: 'Relation Types' },
+    header: () => <Trans i18nKey="Relation Types" />,
+    cell: (info) => <p>{info.getValue() || 'N/A'}</p>,
+  }),
+  columnHelper.accessor(
+    (row) => row.twe_relationship_fields?.subject_screen_names?.join(', ') || '',
+    {
+      id: 'subject_screen_names',
+      meta: { exportKey: 'subject_screen_names', exportHeader: 'Subject Accounts' },
+      header: () => <Trans i18nKey="Subject Accounts" />,
+      cell: (info) => <p class="w-40 break-words">{info.getValue() || 'N/A'}</p>,
+    },
+  ),
+  columnHelper.accessor((row) => row.twe_relationship_fields?.subject_user_ids?.join(', ') || '', {
+    id: 'subject_user_ids',
+    meta: { exportKey: 'subject_user_ids', exportHeader: 'Subject User IDs' },
+    header: () => <Trans i18nKey="Subject User IDs" />,
+    cell: (info) => <p class="w-28 break-all font-mono text-xs">{info.getValue() || 'N/A'}</p>,
+  }),
+  columnHelper.accessor((row) => row.twe_relationship_fields?.last_observed_at || 0, {
+    id: 'last_observed_at',
+    meta: {
+      exportKey: 'last_observed_at',
+      exportHeader: 'Last Observed At',
+      exportValue: (row) =>
+        row.original.twe_relationship_fields?.last_observed_at
+          ? formatDateTime(
+              row.original.twe_relationship_fields.last_observed_at,
+              options.get('dateTimeFormat'),
+            )
+          : '',
+    },
+    header: () => <Trans i18nKey="Last Observed At" />,
+    cell: (info) => (
+      <p class="w-24">
+        {info.getValue() ? formatDateTime(info.getValue(), options.get('dateTimeFormat')) : 'N/A'}
+      </p>
+    ),
   }),
   columnHelper.accessor('dm_permissions.can_dm', {
     meta: { exportKey: 'can_dm', exportHeader: 'Can DM' },
