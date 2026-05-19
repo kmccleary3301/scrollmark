@@ -39,7 +39,7 @@ Compatibility:
 
 Attribution:
 
-Scrollmark is maintained by Kyle McCleary and is based on the original MIT-licensed `twitter-web-exporter` by prinsss.
+Scrollmark is maintained by Kyle McCleary. It began as an MIT-licensed fork of `twitter-web-exporter` by prinsss, but has since been rebuilt and overhauled across the core product surface. Original copyright and license notices are preserved.
 
 ## Known Limitations
 
@@ -48,4 +48,3 @@ Scrollmark is maintained by Kyle McCleary and is based on the original MIT-licen
 - Very large exports may require balanced or fastest ZIP compression settings.
 - Imported bundles are not synced to, or applied back onto, a real X account.
 - Final screenshots should be captured after the final manual QC session confirms the UI.
-

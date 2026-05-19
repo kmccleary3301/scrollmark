@@ -25,9 +25,10 @@
 - [x] Search phrase-quality harness exists and passes locally.
 - [x] Chrome CDP metric smoke probe exists and passes locally.
 - [x] Local install endpoint verified for Firefox/e2e and Chrome/e2e build artifacts.
-- [x] Scrollmark user-facing rebrand is applied with cat/icon retention policy documented.
+- [x] Scrollmark user-facing rebrand is applied with install/header/launcher icon policy documented.
 - [ ] Manual browser QC completed against real exports.
 - [ ] Script store README/screenshots updated.
+- [ ] Final README screenshots refreshed after manual QC if current screenshots no longer represent the release UI.
 
 ## Manual QC Fixtures
 

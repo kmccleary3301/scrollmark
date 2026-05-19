@@ -72,9 +72,9 @@ export default defineConfig({
         },
         description: {
           '': 'Local-first X/Twitter research archive, search, bookmark capture, and portable bundle export by Kyle McCleary.',
-          'zh-CN': '从 Twitter(X) 网页版导出推文、书签、列表等各种数据，支持导出 JSON/CSV/HTML。',
-          'zh-TW': '從 Twitter(X) 網頁版匯出推文、書籤、列表等各種資料，支援匯出 JSON/CSV/HTML。',
-          ja: 'Twitter(X) ブラウザ版からツイート、ブックマーク、リストなどを取得し JSON/CSV/HTML に出力します。',
+          'zh-CN': '本地优先的 X/Twitter 研究归档、搜索、书签采集与可移植 Bundle 导出工具。',
+          'zh-TW': '本地優先的 X/Twitter 研究歸檔、搜尋、書籤擷取與可攜式 Bundle 匯出工具。',
+          ja: 'ローカルファーストの X/Twitter 研究アーカイブ、検索、ブックマーク取得、ポータブル Bundle 出力ツール。',
         },
         namespace: 'https://github.com/kmccleary3301/scrollmark',
         icon: twitterIconPng,

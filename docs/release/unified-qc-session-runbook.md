@@ -18,8 +18,8 @@ Do not start user manual QC until all are true:
 1. Install or update the Firefox userscript build.
 2. Hard reload `https://x.com/home`.
 3. Confirm the widget appears.
-4. Confirm the cat icon is still present.
-5. Confirm the product header and attribution are correct if rebrand is active.
+4. Confirm the floating launcher uses the approved Scrollmark mark.
+5. Confirm the product header and attribution are correct.
 6. Browse home timeline for 2 to 3 minutes.
 7. Browse bookmarks and at least one bookmark folder.
 8. Open Bookmarks viewer.

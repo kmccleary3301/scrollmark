@@ -13,7 +13,9 @@ By Kyle McCleary
 
 ## Icon Policy
 
-The existing userscript icon is retained for this release. Do not replace the cat/icon asset unless the product owner explicitly requests it later.
+The userscript install metadata and widget header retain the Twitter icon for this release.
+
+The floating launcher uses the Scrollmark mark approved by the product owner. Do not replace either icon surface unless the product owner explicitly requests it later.
 
 ## Compatibility Policy
 
@@ -27,7 +29,7 @@ Rationale:
 
 ## Attribution Policy
 
-Scrollmark is a heavily overhauled fork of `prinsss/twitter-web-exporter`.
+Scrollmark began as an MIT-licensed fork of `prinsss/twitter-web-exporter`, but has since been rebuilt and overhauled across capture, search, storage, UI, bundle import/export, diagnostics, performance, branding, and release workflows.
 
 Release materials must preserve:
 
@@ -38,8 +40,9 @@ Release materials must preserve:
 Suggested release copy:
 
 ```text
-Scrollmark is a local-first X/Twitter research archive and export userscript by Kyle McCleary,
-built from a substantially overhauled MIT-licensed fork of Twitter Web Exporter by prinsss.
+Scrollmark is a local-first X/Twitter research archive, search workbench, media viewer, and portable bundle system by Kyle McCleary.
+
+It began as an MIT-licensed fork of Twitter Web Exporter by prinsss, but has since been rebuilt and overhauled across the core product surface. Original copyright and license notices are preserved.
 ```
 
 ## Store Metadata Direction
@@ -65,7 +68,6 @@ Long description should emphasize:
 
 Do not rename these before first stable release unless explicitly approved:
 
-- `package.json` package name,
 - IndexedDB database name,
 - raw spool database name,
 - local development endpoint path,
