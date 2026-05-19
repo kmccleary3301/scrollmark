@@ -3,6 +3,14 @@ import { options } from '@/core/options';
 import logger from '@/utils/logger';
 import { Signal } from '@preact/signals';
 import { Extension, ExtensionConstructor } from './extension';
+import { ExtensionInterceptorDispatcher } from './interceptor-dispatcher';
+import {
+  HookDebugConfig,
+  HookMode,
+  RepairMode,
+  RuntimeControlPlane,
+  RuntimeModes,
+} from './runtime-control-plane';
 
 /**
  * Global object reference. In some cases, the `unsafeWindow` is not available.
@@ -77,25 +85,15 @@ const HOOK_MESSAGE_FLAG = '__twe_mcp_hook_v1';
 const ORIG_XHR_OPEN_KEY = '__twe_orig_xhr_open_v1';
 const ORIG_XHR_SEND_KEY = '__twe_orig_xhr_send_v1';
 const ORIG_FETCH_KEY = '__twe_orig_fetch_v1';
-const HOOK_RUNTIME_KEY = '__twe_runtime_v1';
-const HOOK_STATS_KEY = '__twe_hook_stats_v1';
-const RUNTIME_MODES_KEY = '__twe_runtime_modes_v1';
-const BOOKMARK_CONTEXT_KEY = '__twe_bookmark_context_v1';
-const BOOKMARK_CONTEXT_DUMP_KEY = '__twe_bookmark_context_dump_v1';
 const HOOK_BOOTSTRAP_ERROR_KEY = '__twe_bootstrap_error_v1';
-const HOOK_RUNTIME_SIGNATURE = 'twitter-web-exporter-hook-v1';
 const BOOKMARK_CONTEXT_BOOKMARKS_ONLY_STALE_MS = 45000;
 const BOOKMARK_CONTEXT_LOCK_TTL_MS = 180000;
 const BOOKMARK_CONTEXT_SCAN_DEPTH = 6;
 const BOOKMARK_CONTEXT_MIN_CONFIDENCE = 12;
 const BOOKMARK_CONTEXT_DUMP_LIMIT = 200;
-const BOOKMARK_CONTEXT_LOCK_KEY = '__twe_bookmark_context_lock_v1';
 const HOOK_REVISION = 3;
 const EXTENSION_MANAGER_SIGNATURE = 'twitter-web-exporter-extension-manager-v1';
 const EXTENSION_MANAGER_REVISION = 3;
-const HOOK_REPAIR_INTERVAL_MS = 1100;
-const HOOK_REPAIR_BACKOFF_MAX_MS = 60000;
-const HOOK_REPAIR_FAILURE_LIMIT = 5;
 const RESPONSE_DEDUPE_WINDOW_MS = 2600;
 const RESPONSE_DEDUPE_MAX_ENTRIES = 500;
 const RESPONSE_DEDUPE_CLEANUP_COUNT = 120;
@@ -135,73 +133,6 @@ type HookStats = {
 };
 
 type RecentSig = { sig: string; at: number };
-
-type HookMode = 'both' | 'xhr' | 'fetch' | 'off';
-type RepairMode = 'watchdog' | 'off';
-type RuntimeModes = {
-  safeMode: boolean;
-  hookMode: HookMode;
-  repairMode: RepairMode;
-};
-
-const LOCAL_STORAGE_SAFE_MODE_KEY = 'twe_safe_mode_v1';
-const LOCAL_STORAGE_HOOK_MODE_KEY = 'twe_hook_mode_v1';
-const LOCAL_STORAGE_REPAIR_MODE_KEY = 'twe_repair_mode_v1';
-
-function normalizeHookMode(value: unknown): HookMode {
-  return value === 'xhr' || value === 'fetch' || value === 'off' ? value : 'both';
-}
-
-function normalizeRepairMode(value: unknown): RepairMode {
-  return value === 'off' ? 'off' : 'watchdog';
-}
-
-function readLocalStorageValue(key: string): string | null {
-  try {
-    if (typeof localStorage === 'undefined') return null;
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeLocalStorageValue(key: string, value: string): void {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(key, value);
-  } catch {
-    // ignore
-  }
-}
-
-function resolveRuntimeModes(): RuntimeModes {
-  const optionSafeMode = !!options.get('safeMode', false);
-  const optionHookMode = normalizeHookMode(options.get('hookMode', 'both'));
-  const optionRepairMode = normalizeRepairMode(options.get('repairMode', 'watchdog'));
-
-  const storageSafeMode = readLocalStorageValue(LOCAL_STORAGE_SAFE_MODE_KEY);
-  const storageHookMode = readLocalStorageValue(LOCAL_STORAGE_HOOK_MODE_KEY);
-  const storageRepairMode = readLocalStorageValue(LOCAL_STORAGE_REPAIR_MODE_KEY);
-
-  const globalModes = (globalThis as Record<string, unknown>)[RUNTIME_MODES_KEY] as
-    | Partial<RuntimeModes>
-    | undefined;
-
-  const safeMode =
-    typeof globalModes?.safeMode === 'boolean'
-      ? globalModes.safeMode
-      : storageSafeMode === '1' || storageSafeMode === 'true'
-        ? true
-        : storageSafeMode === '0' || storageSafeMode === 'false'
-          ? false
-          : optionSafeMode;
-  const hookMode = normalizeHookMode(globalModes?.hookMode ?? storageHookMode ?? optionHookMode);
-  const repairMode = normalizeRepairMode(
-    globalModes?.repairMode ?? storageRepairMode ?? optionRepairMode,
-  );
-
-  return { safeMode, hookMode, repairMode };
-}
 
 function getRuntimeCapabilities(): {
   hasUnsafeWindow: boolean;
@@ -286,6 +217,7 @@ let activeBookmarkContext: BookmarkContextPayload = {
 };
 
 let bookmarkContextLock: BookmarkContextPayload | null = null;
+let bookmarkContextDumpState: BookmarkContextDumpEntry[] = [];
 
 type BookmarkContextDumpEntry = {
   requestId: string;
@@ -313,6 +245,97 @@ type HookedXhr = XMLHttpRequest & {
   __twe_req_bookmark_context_v1?: BookmarkContextPayload | null;
   __twe_hooked_v1?: boolean;
 };
+
+type XhrRequestMeta = {
+  method: string;
+  url: string;
+  body: string;
+  requestId: string;
+  bookmarkContext: BookmarkContextPayload | null;
+  hooked: boolean;
+};
+
+const xhrRequestMetaMap = new WeakMap<XMLHttpRequest, XhrRequestMeta>();
+
+function createDefaultXhrRequestMeta(): XhrRequestMeta {
+  return {
+    method: 'GET',
+    url: '',
+    body: '',
+    requestId: '',
+    bookmarkContext: null,
+    hooked: false,
+  };
+}
+
+function ensureXhrRequestMeta(xhr: XMLHttpRequest): XhrRequestMeta {
+  const existing = xhrRequestMetaMap.get(xhr);
+  if (existing) return existing;
+  const next = createDefaultXhrRequestMeta();
+  xhrRequestMetaMap.set(xhr, next);
+  return next;
+}
+
+function loadXhrRequestMeta(xhr: HookedXhr, debugConfig: HookDebugConfig): XhrRequestMeta {
+  if (debugConfig.disableExpandoMeta) {
+    return ensureXhrRequestMeta(xhr);
+  }
+  const method = typeof xhr.__twe_req_method_v1 === 'string' ? xhr.__twe_req_method_v1 : 'GET';
+  const url = typeof xhr.__twe_req_url_v1 === 'string' ? xhr.__twe_req_url_v1 : '';
+  const body = typeof xhr.__twe_req_body_v1 === 'string' ? xhr.__twe_req_body_v1 : '';
+  const requestId = typeof xhr.__twe_req_id_v1 === 'string' ? xhr.__twe_req_id_v1 : '';
+  const bookmarkContext =
+    xhr.__twe_req_bookmark_context_v1 && typeof xhr.__twe_req_bookmark_context_v1 === 'object'
+      ? xhr.__twe_req_bookmark_context_v1
+      : null;
+  const hooked = !!xhr.__twe_hooked_v1;
+  return {
+    method,
+    url,
+    body,
+    requestId,
+    bookmarkContext,
+    hooked,
+  };
+}
+
+function storeXhrRequestMeta(
+  xhr: HookedXhr,
+  debugConfig: HookDebugConfig,
+  meta: XhrRequestMeta,
+): void {
+  if (debugConfig.disableExpandoMeta) {
+    xhrRequestMetaMap.set(xhr, meta);
+    return;
+  }
+  xhr.__twe_req_method_v1 = meta.method;
+  xhr.__twe_req_url_v1 = meta.url;
+  xhr.__twe_req_body_v1 = meta.body;
+  xhr.__twe_req_id_v1 = meta.requestId;
+  xhr.__twe_req_bookmark_context_v1 = meta.bookmarkContext;
+  xhr.__twe_hooked_v1 = meta.hooked;
+}
+
+function callFunctionWithArgs(
+  fn: (...args: unknown[]) => unknown,
+  thisArg: unknown,
+  args: unknown[],
+): unknown {
+  switch (args.length) {
+    case 0:
+      return fn.call(thisArg);
+    case 1:
+      return fn.call(thisArg, args[0]);
+    case 2:
+      return fn.call(thisArg, args[0], args[1]);
+    case 3:
+      return fn.call(thisArg, args[0], args[1], args[2]);
+    case 4:
+      return fn.call(thisArg, args[0], args[1], args[2], args[3]);
+    default:
+      return fn.call(thisArg, args[0], args[1], args[2], args[3], args[4]);
+  }
+}
 
 type InterceptedRequest = {
   method: string;
@@ -348,71 +371,20 @@ function recordBootstrapError(
     at: Date.now(),
   };
 
-  try {
-    const g = hookGlobalObject as Record<string, unknown>;
-    g[HOOK_BOOTSTRAP_ERROR_KEY] = report;
-    (window as unknown as Record<string, unknown>)[HOOK_BOOTSTRAP_ERROR_KEY] = report;
-    (globalThis as unknown as Record<string, unknown>)[HOOK_BOOTSTRAP_ERROR_KEY] = report;
-  } catch {
-    // ignore
-  }
-
   return report;
 }
 
 function clearBootstrapErrorMarker(): void {
   try {
-    const g = hookGlobalObject as Record<string, unknown>;
     const deleted = (obj: unknown, key: string) => {
       if (obj && typeof obj === 'object') {
         delete (obj as Record<string, unknown>)[key];
       }
     };
 
-    deleted(g, HOOK_BOOTSTRAP_ERROR_KEY);
-    deleted(window, HOOK_BOOTSTRAP_ERROR_KEY);
     deleted(globalThis, HOOK_BOOTSTRAP_ERROR_KEY);
   } catch {
     // ignore
-  }
-}
-
-function publishExtensionManagerGlobal(manager: unknown): void {
-  const targets = [
-    hookGlobalObject as unknown as Record<string, unknown>,
-    window as unknown as Record<string, unknown>,
-    globalThis as unknown as Record<string, unknown>,
-  ];
-  for (const target of targets) {
-    if (!target || typeof target !== 'object') continue;
-    try {
-      target['__twe_extension_manager_v1'] = manager;
-    } catch {
-      // ignore
-    }
-  }
-}
-
-function publishHookGlobals(hookStats: HookStats, runtimePayload: Record<string, unknown>): void {
-  const targets = [
-    hookGlobalObject as unknown as Record<string, unknown>,
-    window as unknown as Record<string, unknown>,
-    globalThis as unknown as Record<string, unknown>,
-  ];
-  for (const target of targets) {
-    if (!target || typeof target !== 'object') continue;
-    try {
-      target[HOOK_STATS_KEY] = hookStats;
-      const existing = target[HOOK_RUNTIME_KEY];
-      const existingObject =
-        existing && typeof existing === 'object' ? (existing as Record<string, unknown>) : {};
-      target[HOOK_RUNTIME_KEY] = {
-        ...existingObject,
-        ...runtimePayload,
-      };
-    } catch {
-      // ignore
-    }
   }
 }
 
@@ -607,29 +579,21 @@ function appendBookmarkContextDump(entry: BookmarkContextDumpEntry) {
     normalizedRoute: entry.normalizedRoute || '',
   };
 
-  try {
-    const current = normalizeContextDumpList(
-      (hookGlobalObject as Record<string, unknown>)[BOOKMARK_CONTEXT_DUMP_KEY],
-    );
-    current.unshift(safeEntry);
-    const deduped = new Map<string, BookmarkContextDumpEntry>();
-    for (const candidate of current) {
-      if (!deduped.has(candidate.requestId)) {
-        deduped.set(candidate.requestId, candidate);
-      }
+  const current = normalizeContextDumpList(bookmarkContextDumpState);
+  current.unshift(safeEntry);
+  const deduped = new Map<string, BookmarkContextDumpEntry>();
+  for (const candidate of current) {
+    if (!deduped.has(candidate.requestId)) {
+      deduped.set(candidate.requestId, candidate);
     }
-    const next = Array.from(deduped.values())
-      .slice(0, BOOKMARK_CONTEXT_DUMP_LIMIT)
-      .sort((a, b) => b.ts - a.ts);
-    const staleCutoff = Date.now() - BOOKMARK_CONTEXT_BOOKMARKS_ONLY_STALE_MS * 6;
-    const trimmed = next.filter((candidate) => !staleCutoff || candidate.ts >= staleCutoff);
-
-    (hookGlobalObject as Record<string, unknown>)[BOOKMARK_CONTEXT_DUMP_KEY] = trimmed;
-    (window as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_DUMP_KEY] = trimmed;
-    (globalThis as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_DUMP_KEY] = trimmed;
-  } catch {
-    // ignore
   }
+  const next = Array.from(deduped.values())
+    .slice(0, BOOKMARK_CONTEXT_DUMP_LIMIT)
+    .sort((a, b) => b.ts - a.ts);
+  const staleCutoff = Date.now() - BOOKMARK_CONTEXT_BOOKMARKS_ONLY_STALE_MS * 6;
+  bookmarkContextDumpState = next.filter(
+    (candidate) => !staleCutoff || candidate.ts >= staleCutoff,
+  );
 }
 
 function setBookmarkContextLock(value: BookmarkContextPayload): void {
@@ -648,25 +612,10 @@ function setBookmarkContextLock(value: BookmarkContextPayload): void {
   }
 
   bookmarkContextLock = payload;
-  try {
-    const g = hookGlobalObject as Record<string, unknown>;
-    g[BOOKMARK_CONTEXT_LOCK_KEY] = payload;
-    (window as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY] = payload;
-    (globalThis as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY] = payload;
-  } catch {
-    // ignore
-  }
 }
 
 function getBookmarkContextLock(now = Date.now()): BookmarkContextPayload | null {
   const candidates = [bookmarkContextLock] as Array<unknown>;
-  try {
-    candidates.push((hookGlobalObject as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY]);
-    candidates.push((window as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY]);
-    candidates.push((globalThis as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY]);
-  } catch {
-    // ignore
-  }
 
   for (const raw of candidates) {
     if (!raw || typeof raw !== 'object') continue;
@@ -696,14 +645,6 @@ function getBookmarkContextLock(now = Date.now()): BookmarkContextPayload | null
 
 function clearBookmarkContextLock(): void {
   bookmarkContextLock = null;
-  try {
-    const g = hookGlobalObject as Record<string, unknown>;
-    delete g[BOOKMARK_CONTEXT_LOCK_KEY];
-    delete (window as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY];
-    delete (globalThis as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_LOCK_KEY];
-  } catch {
-    // ignore
-  }
 }
 
 function resolveCanonicalRouteFromUrl(url: string): { folderId: string | null; pageUrl: string } {
@@ -1076,46 +1017,6 @@ function extractBookmarkFolderIdFromPath(pathOrUrl: string): string | null {
 function normalizeBookmarkTabCandidateSource(value: string | null): string {
   if (!value) return 'bookmark-tab';
   return value;
-}
-
-function captureBookmarkRouteFromNavigationArgs(args: unknown[]): BookmarkRouteCandidate | null {
-  if (!args.length) return null;
-  const stateArg = args[0];
-  const urlArg = args[2];
-  const urlSource =
-    typeof urlArg === 'string'
-      ? urlArg
-      : typeof urlArg === 'object' && urlArg
-        ? String(urlArg)
-        : null;
-  if (urlSource) {
-    const fromUrl = captureBookmarkRouteFromUrl(urlSource);
-    if (fromUrl?.folderId) {
-      return {
-        folderId: fromUrl.folderId,
-        pageUrl: fromUrl.pageUrl,
-        source: 'history-url',
-        confidence: 95,
-      };
-    }
-  }
-
-  const fromState = findFolderIdInUnknownValue(stateArg);
-  if (fromState?.folderId) {
-    const pageUrl =
-      fromState.pageUrl ||
-      (urlSource && captureBookmarkRouteFromUrl(urlSource)?.pageUrl
-        ? captureBookmarkRouteFromUrl(urlSource)!.pageUrl
-        : '');
-    return {
-      folderId: fromState.folderId,
-      pageUrl: pageUrl || (typeof location !== 'undefined' ? location.href : ''),
-      source: 'history-state',
-      confidence: 90,
-    };
-  }
-
-  return null;
 }
 
 function captureBookmarkRouteFromPerformanceNavigation(): BookmarkRouteCandidate | null {
@@ -1655,35 +1556,37 @@ function setBookmarkContext(value: unknown): void {
   } else if (!isBookmarksRoute(payload.pageUrl)) {
     clearBookmarkContextLock();
   }
-  try {
-    // The same value needs to be visible from both content and page realms.
-    (hookGlobalObject as Record<string, unknown>)[BOOKMARK_CONTEXT_KEY] = payload;
-  } catch {
-    // ignore
-  }
-  try {
-    (window as unknown as Record<string, unknown>)[BOOKMARK_CONTEXT_KEY] = payload;
-  } catch {
-    // ignore
-  }
-  try {
-    (globalThis as Record<string, unknown>)[BOOKMARK_CONTEXT_KEY] = payload;
-  } catch {
-    // ignore
-  }
 }
 
 function defineOn(target: object, name: string, fn: unknown): boolean {
-  try {
-    if (typeof fn !== 'function') {
-      return false;
-    }
-    const hookFn = fn as HookCallable;
-    const exportFunctionMaybe = getExportFunctionMaybe();
-    if (exportFunctionMaybe) {
+  if (typeof fn !== 'function') {
+    return false;
+  }
+  const hookFn = fn as HookCallable;
+  const exportFunctionMaybe = getExportFunctionMaybe();
+  if (exportFunctionMaybe) {
+    try {
       exportFunctionMaybe(hookFn, target, { defineAs: name });
       return true;
+    } catch (err) {
+      // Do not fall back to direct assignment when exportFunction exists but fails.
+      // Assigning content-realm hook functions onto page-realm targets causes Firefox
+      // cross-compartment permission faults inside X's runtime.
+      logger.error(`Failed to define ${name} hook`, err);
+      return false;
     }
+  }
+
+  // Only direct-assign in same-realm cases. Cross-realm direct assignment is unsafe.
+  if (target !== (globalThis as unknown as object)) {
+    logger.error(
+      `Failed to define ${name} hook`,
+      new Error('exportFunction unavailable for cross-realm target'),
+    );
+    return false;
+  }
+
+  try {
     (target as Record<string, unknown>)[name] = hookFn;
     return true;
   } catch (err) {
@@ -1717,6 +1620,112 @@ function getFunctionFromHookState(
     current = nested as unknown as Record<string, unknown>;
   }
   return undefined;
+}
+
+function isUsableFetchBaseCandidate(candidate: unknown): candidate is typeof fetch {
+  if (typeof candidate !== 'function') return false;
+  // Never accept a function that looks like one of our wrappers as the "base" fetch.
+  if (hasHookShape(candidate, '__twe_is_hook_fetch_v1')) return false;
+  return true;
+}
+
+function getObjectStringProperty(value: unknown, key: string): string | null {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+    return null;
+  }
+  try {
+    const candidate = (value as Record<string, unknown>)[key];
+    return typeof candidate === 'string' ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractFetchLikeMethod(input: RequestInfo | URL, init?: RequestInit): string {
+  const fromInit = typeof init?.method === 'string' && init.method ? init.method : null;
+  if (fromInit) return fromInit;
+
+  try {
+    if (typeof Request !== 'undefined' && input instanceof Request) {
+      return input.method || 'GET';
+    }
+  } catch {
+    // ignore
+  }
+
+  const fromInput = getObjectStringProperty(input, 'method');
+  if (fromInput && fromInput.length > 0) return fromInput;
+  return 'GET';
+}
+
+function extractFetchLikeUrl(input: RequestInfo | URL): string {
+  try {
+    if (typeof input === 'string') return input;
+    if (typeof URL !== 'undefined' && input instanceof URL) return input.toString();
+    if (typeof Request !== 'undefined' && input instanceof Request) return input.url || '';
+  } catch {
+    // ignore
+  }
+
+  const fromInput = getObjectStringProperty(input, 'url');
+  if (fromInput && fromInput.length > 0) return fromInput;
+
+  try {
+    return String(input ?? '');
+  } catch {
+    return '';
+  }
+}
+
+function isCaptureCandidateApiUrl(url: string): boolean {
+  if (!url) return false;
+  return /\/graphql\/|\/i\/api\/|\/api\/1\.1\/|\/api\/2\//.test(url);
+}
+
+function getSafeErrorInfo(error: unknown): { name: string; message: string; summary: string } {
+  let name: string = typeof error;
+  let message = '';
+
+  if (error === null) {
+    return { name: 'null', message: 'null', summary: 'null: null' };
+  }
+  if (typeof error === 'undefined') {
+    return { name: 'undefined', message: 'undefined', summary: 'undefined: undefined' };
+  }
+  if (typeof error === 'string') {
+    return { name: 'Error', message: error, summary: `Error: ${error}` };
+  }
+
+  try {
+    const candidate = error as { name?: unknown; message?: unknown };
+    if (typeof candidate.name === 'string' && candidate.name.length > 0) {
+      name = candidate.name;
+    }
+    if (typeof candidate.message === 'string' && candidate.message.length > 0) {
+      message = candidate.message;
+    }
+  } catch {
+    // ignore
+  }
+
+  if (!message) {
+    try {
+      message = String(error);
+    } catch {
+      message = '[inaccessible error object]';
+    }
+  }
+
+  return {
+    name,
+    message,
+    summary: `${name}: ${message}`,
+  };
+}
+
+function isLikelyCrossRealmPermissionError(error: unknown): boolean {
+  const info = getSafeErrorInfo(error);
+  return /permission denied to access (property|object|then|apply)/i.test(info.summary);
 }
 
 function postHookMessage(payload: unknown): void {
@@ -1796,11 +1805,8 @@ export class ExtensionManager {
   private hookRuntime: HookStats | null = null;
   private recentResponseSigs: Map<string, RecentSig> = new Map();
   private lastStickyBookmarkContext: BookmarkContextPayload | null = null;
-  private hookRepairInterval: ReturnType<typeof setTimeout> | null = null;
-  private hookRepairBackoffMs = HOOK_REPAIR_INTERVAL_MS;
-  private hookRepairFailures = 0;
-  private runtimeModes: RuntimeModes = resolveRuntimeModes();
-  private runtimeModeReason = '';
+  private readonly runtimeControlPlane: RuntimeControlPlane;
+  private readonly interceptorDispatcher = new ExtensionInterceptorDispatcher();
   private pageMessageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
   private instanceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   public readonly __twe_extension_manager_signature_v1 = EXTENSION_MANAGER_SIGNATURE;
@@ -1814,101 +1820,54 @@ export class ExtensionManager {
    */
   public signal = new Signal(1);
 
+  private get runtimeModes(): RuntimeModes {
+    return this.runtimeControlPlane.getRuntimeModes();
+  }
+
+  private get hookDebugConfig(): HookDebugConfig {
+    return this.runtimeControlPlane.getHookDebugConfig();
+  }
+
   private isHookModeEnabled(target: 'xhr' | 'fetch'): boolean {
-    if (this.runtimeModes.safeMode) {
-      return false;
-    }
-    if (this.runtimeModes.hookMode === 'off') {
-      return false;
-    }
-    if (this.runtimeModes.hookMode === 'both') {
-      return true;
-    }
-    return this.runtimeModes.hookMode === target;
+    return this.runtimeControlPlane.isHookModeEnabled(target);
   }
 
-  private persistRuntimeModes() {
-    writeLocalStorageValue(LOCAL_STORAGE_SAFE_MODE_KEY, this.runtimeModes.safeMode ? '1' : '0');
-    writeLocalStorageValue(LOCAL_STORAGE_HOOK_MODE_KEY, this.runtimeModes.hookMode);
-    writeLocalStorageValue(LOCAL_STORAGE_REPAIR_MODE_KEY, this.runtimeModes.repairMode);
-    try {
-      options.set('safeMode', this.runtimeModes.safeMode);
-      options.set('hookMode', this.runtimeModes.hookMode);
-      options.set('repairMode', this.runtimeModes.repairMode);
-    } catch {
-      // ignore
-    }
+  private refreshHookDebugConfig() {
+    this.runtimeControlPlane.refreshHookDebugConfig();
   }
 
-  private publishRuntimeModes(extra?: Record<string, unknown>) {
-    const payload = {
-      safeMode: this.runtimeModes.safeMode,
-      hookMode: this.runtimeModes.hookMode,
-      repairMode: this.runtimeModes.repairMode,
-      reason: this.runtimeModeReason || undefined,
-      ...extra,
-    };
-    try {
-      (globalThis as Record<string, unknown>)[RUNTIME_MODES_KEY] = payload;
-    } catch {
-      // ignore
-    }
-    try {
-      (hookGlobalObject as Record<string, unknown>)[RUNTIME_MODES_KEY] = payload;
-    } catch {
-      // ignore
-    }
-  }
-
-  private runHookSelfTest(): { ok: boolean; error?: string } {
-    try {
-      if (this.runtimeModes.safeMode || this.runtimeModes.hookMode === 'off') {
-        return { ok: true };
-      }
-      if (this.isHookModeEnabled('xhr')) {
-        const xhrCtor = hookGlobalObject.XMLHttpRequest;
-        if (!xhrCtor?.prototype) {
-          return { ok: false, error: 'XMLHttpRequest.prototype unavailable' };
-        }
-        if (typeof xhrCtor.prototype.open !== 'function') {
-          return { ok: false, error: 'XMLHttpRequest.prototype.open unavailable' };
-        }
-        if (typeof xhrCtor.prototype.send !== 'function') {
-          return { ok: false, error: 'XMLHttpRequest.prototype.send unavailable' };
-        }
-      }
-      if (this.isHookModeEnabled('fetch')) {
-        const fetchCandidate = (hookGlobalObject as Record<string, unknown>).fetch;
-        if (typeof fetchCandidate !== 'function') {
-          return { ok: false, error: 'fetch unavailable' };
-        }
-      }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: String(err) };
-    }
+  private emitHookDiag(
+    phase: string,
+    payload: Record<string, unknown>,
+    options?: { force?: boolean },
+  ) {
+    this.runtimeControlPlane.emitHookDiag(phase, payload, options);
   }
 
   private enableSafeMode(reason: string, error?: unknown) {
-    this.runtimeModes.safeMode = true;
-    this.runtimeModeReason = reason;
-    this.persistRuntimeModes();
-    this.publishRuntimeModes({
-      enabledAt: Date.now(),
-      error: error ? String(error) : undefined,
-    });
-    this.uninstallHooks();
-    if (this.hookRepairInterval !== null) {
-      clearTimeout(this.hookRepairInterval);
-      this.hookRepairInterval = null;
-    }
-    logger.error(`Hook safe mode enabled (${reason})`, error ?? '');
+    this.runtimeControlPlane.enableSafeMode(reason, error);
   }
 
-  private refreshRuntimeModes() {
-    this.runtimeModes = resolveRuntimeModes();
-    this.persistRuntimeModes();
-    this.publishRuntimeModes();
+  public applyRuntimeModesFromOptions() {
+    this.runtimeControlPlane.applyRuntimeModesFromOptions();
+  }
+
+  public getRuntimeModesSnapshot(): {
+    safeMode: boolean;
+    hookMode: HookMode;
+    repairMode: RepairMode;
+    reason?: string;
+  } {
+    return this.runtimeControlPlane.getRuntimeModesSnapshot();
+  }
+
+  public getHookStatsSnapshot(): {
+    xhrMessages: number;
+    fetchMessages: number;
+    lastUrl: string;
+    lastAt: number;
+  } | null {
+    return this.runtimeControlPlane.getHookStatsSnapshot();
   }
 
   public dispose(): void {
@@ -1930,11 +1889,6 @@ export class ExtensionManager {
       // ignore
     }
 
-    if (this.hookRepairInterval !== null) {
-      clearTimeout(this.hookRepairInterval);
-      this.hookRepairInterval = null;
-    }
-
     if (this.pageMessageHandler) {
       try {
         window.removeEventListener('message', this.pageMessageHandler, false);
@@ -1944,7 +1898,39 @@ export class ExtensionManager {
       this.pageMessageHandler = null;
     }
 
-    this.uninstallHooks();
+    this.runtimeControlPlane.dispose();
+  }
+
+  private runHookSelfTest(): { ok: boolean; error?: string } {
+    try {
+      if (this.runtimeModes.safeMode || this.runtimeModes.hookMode === 'off') {
+        return { ok: true };
+      }
+      const hookTarget = getHookGlobalObject() as unknown as Record<string, unknown>;
+      if (this.isHookModeEnabled('xhr')) {
+        const xhrCtor = hookTarget.XMLHttpRequest as
+          | { prototype?: { open?: unknown; send?: unknown } }
+          | undefined;
+        if (!xhrCtor?.prototype) {
+          return { ok: false, error: 'XMLHttpRequest.prototype unavailable' };
+        }
+        if (typeof xhrCtor.prototype.open !== 'function') {
+          return { ok: false, error: 'XMLHttpRequest.prototype.open unavailable' };
+        }
+        if (typeof xhrCtor.prototype.send !== 'function') {
+          return { ok: false, error: 'XMLHttpRequest.prototype.send unavailable' };
+        }
+      }
+      if (this.isHookModeEnabled('fetch')) {
+        const fetchCandidate = hookTarget.fetch;
+        if (typeof fetchCandidate !== 'function') {
+          return { ok: false, error: 'fetch unavailable' };
+        }
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
   }
 
   private syncRuntimeStats() {
@@ -1960,6 +1946,21 @@ export class ExtensionManager {
     this.hookRuntime.activeInstanceId = this.hookStats.activeInstanceId;
     this.hookRuntime.rev = this.hookStats.rev;
     this.hookRuntime.endpointStats = this.hookStats.endpointStats;
+  }
+
+  private readHookStatsSnapshot(): {
+    xhrMessages: number;
+    fetchMessages: number;
+    lastUrl: string;
+    lastAt: number;
+  } | null {
+    if (!this.hookStats) return null;
+    return {
+      xhrMessages: Number(this.hookStats.xhrMessages || 0),
+      fetchMessages: Number(this.hookStats.fetchMessages || 0),
+      lastUrl: typeof this.hookStats.lastUrl === 'string' ? this.hookStats.lastUrl : '',
+      lastAt: Number(this.hookStats.lastAt || 0),
+    };
   }
 
   private getEndpointStats(key: string): EndpointHookMetrics {
@@ -1983,11 +1984,6 @@ export class ExtensionManager {
 
   public uninstallHooks() {
     try {
-      if (this.hookRepairInterval !== null) {
-        clearTimeout(this.hookRepairInterval);
-        this.hookRepairInterval = null;
-      }
-
       const g = hookGlobalObject as Record<string, unknown>;
       const xhrCtor = g.XMLHttpRequest as { prototype?: Record<string, unknown> } | undefined;
       const proto = xhrCtor?.prototype;
@@ -2011,57 +2007,25 @@ export class ExtensionManager {
         delete fetchFn.__twe_is_hook_fetch_v1;
         delete fetchFn.__twe_is_hook_revision_v1;
       }
-      const runtime = g[HOOK_RUNTIME_KEY] as { uninstall?: () => void };
-      if (runtime?.uninstall === this.uninstallHooks) {
-        delete g[HOOK_RUNTIME_KEY];
-        if (typeof window !== 'undefined') {
-          delete (window as unknown as Record<string, unknown>)[HOOK_RUNTIME_KEY];
-        }
-        delete (globalThis as unknown as Record<string, unknown>)[HOOK_RUNTIME_KEY];
-      }
     } catch {
       // ignore
     }
   }
 
   constructor() {
-    this.refreshRuntimeModes();
-    try {
-      this.installPageMessageBridge();
-    } catch (err) {
-      this.enableSafeMode('install-page-message-bridge-failed', err);
-    }
-    try {
-      this.installBookmarkContextTracking();
-    } catch (err) {
-      const details =
-        err instanceof Error ? `${err.name}: ${err.message}` : `unknown error: ${String(err)}`;
-      logger.warn(
-        `Bookmark context tracking install failed; continuing without tracker (${details})`,
-      );
-    }
-    try {
-      if (this.isHookModeEnabled('xhr')) {
-        this.installHttpHooks();
-      }
-      if (this.isHookModeEnabled('fetch')) {
-        this.installFetchHooks();
-      }
-      const hookSelfTest = this.runHookSelfTest();
-      if (!hookSelfTest.ok) {
-        this.enableSafeMode('hook-self-test-failed', hookSelfTest.error);
-      } else if (!this.runtimeModes.safeMode && this.runtimeModes.repairMode !== 'off') {
-        this.startHookRepairLoop();
-      }
-    } catch (err) {
-      this.enableSafeMode('hook-install-failed', err);
-    }
+    this.runtimeControlPlane = new RuntimeControlPlane({
+      installPageMessageBridge: () => this.installPageMessageBridge(),
+      installBookmarkContextTracking: () => this.installBookmarkContextTracking(),
+      installHttpHooks: (force?: boolean) => this.installHttpHooks(force),
+      installFetchHooks: (force?: boolean) => this.installFetchHooks(force),
+      uninstallHooks: () => this.uninstallHooks(),
+      runHookSelfTest: () => this.runHookSelfTest(),
+      runFetchHookBootProbePass: () => this.runFetchHookBootProbePass(),
+      runHookRepairPass: () => this.runHookRepairPass(),
+      readHookStatsSnapshot: () => this.readHookStatsSnapshot(),
+    });
     this.disabledExtensions = new Set(options.get('disabledExtensions', []));
 
-    // Make manager singleton discoverable in page/context globals for preload cleanup.
-    publishExtensionManagerGlobal(this);
-
-    // Do some extra logging when debug mode is enabled.
     if (options.get('debug')) {
       this.debugEnabled = true;
       logger.info('Debug mode enabled');
@@ -2069,89 +2033,11 @@ export class ExtensionManager {
 
     clearBootstrapErrorMarker();
 
-    // A small, safe diagnostics object to make hook health inspectable from the console.
-    const g = hookGlobalObject as Record<string, unknown>;
     let constructorError: BootstrapErrorReport | null = null;
     try {
-      if (!g[HOOK_STATS_KEY]) {
-        g[HOOK_STATS_KEY] = createHookStats(this.instanceId) as HookStats;
-      }
-      const runtimeCandidate = g[HOOK_RUNTIME_KEY];
-      const runtimeObject =
-        runtimeCandidate && typeof runtimeCandidate === 'object'
-          ? (runtimeCandidate as {
-              uninstall?: () => void;
-              rev?: number;
-              __twe_runtime_signature_v1?: string;
-            })
-          : null;
-      if (!runtimeObject?.uninstall || typeof runtimeObject.uninstall !== 'function') {
-        g[HOOK_RUNTIME_KEY] = {
-          __twe_runtime_signature_v1: HOOK_RUNTIME_SIGNATURE,
-          uninstall: () => this.uninstallHooks(),
-        };
-      } else if (
-        runtimeObject.rev !== HOOK_REVISION ||
-        runtimeObject.__twe_runtime_signature_v1 !== HOOK_RUNTIME_SIGNATURE
-      ) {
-        runtimeObject.uninstall();
-      }
-
-      if (g[HOOK_STATS_KEY]) {
-        const existing = g[HOOK_STATS_KEY] as Partial<HookStats>;
-        if (typeof existing.xhrMessages !== 'number') existing.xhrMessages = 0;
-        if (typeof existing.fetchMessages !== 'number') existing.fetchMessages = 0;
-        if (typeof existing.lastUrl !== 'string') existing.lastUrl = '';
-        if (typeof existing.lastAt !== 'number') existing.lastAt = 0;
-        if (typeof existing.loggedUrls !== 'number') existing.loggedUrls = 0;
-        if (typeof existing.messagesTotal !== 'number') existing.messagesTotal = 0;
-        if (typeof existing.messagesLegacyShape !== 'number') existing.messagesLegacyShape = 0;
-        if (typeof existing.messagesMissingContext !== 'number')
-          existing.messagesMissingContext = 0;
-        if (typeof existing.messagesRepairedAtBridge !== 'number')
-          existing.messagesRepairedAtBridge = 0;
-        if (typeof existing.messagesMissingBody !== 'number') existing.messagesMissingBody = 0;
-        if (typeof existing.responsesProcessed !== 'number') existing.responsesProcessed = 0;
-        if (typeof existing.responsesSkippedDuplicate !== 'number')
-          existing.responsesSkippedDuplicate = 0;
-        if (typeof existing.lastMessageAt !== 'number') existing.lastMessageAt = 0;
-        existing.activeInstanceId = this.instanceId;
-        existing.rev = HOOK_REVISION;
-        if (typeof existing.repairCount !== 'number') {
-          existing.repairCount = 0;
-        }
-        if (typeof existing.endpointStats !== 'object' || existing.endpointStats === null) {
-          existing.endpointStats = Object.create(null);
-        }
-      } else {
-        g[HOOK_STATS_KEY] = createHookStats(this.instanceId);
-      }
-      this.hookStats = g[HOOK_STATS_KEY] as HookStats;
+      this.hookStats = createHookStats(this.instanceId);
       this.hookRuntime = this.hookStats;
       this.syncRuntimeStats();
-      g[HOOK_RUNTIME_KEY] = {
-        ...(g[HOOK_RUNTIME_KEY] ?? {}),
-        instanceId: this.instanceId,
-        __twe_runtime_signature_v1: HOOK_RUNTIME_SIGNATURE,
-        revision: HOOK_REVISION,
-        installedAt: Date.now(),
-        modes: this.runtimeModes,
-        runtimeModeReason: this.runtimeModeReason,
-        hookStats: this.hookStats,
-        messagesTotal: this.hookStats.messagesTotal,
-        messagesLegacyShape: this.hookStats.messagesLegacyShape,
-        messagesMissingContext: this.hookStats.messagesMissingContext,
-        messagesRepairedAtBridge: this.hookStats.messagesRepairedAtBridge,
-        messagesMissingBody: this.hookStats.messagesMissingBody,
-        responsesProcessed: this.hookStats.responsesProcessed,
-        responsesSkippedDuplicate: this.hookStats.responsesSkippedDuplicate,
-        lastMessageAt: this.hookStats.lastMessageAt,
-        activeInstanceId: this.hookStats.activeInstanceId,
-        rev: this.hookStats.rev,
-        endpointStats: this.hookStats.endpointStats,
-        uninstall: () => this.uninstallHooks(),
-      };
-      publishHookGlobals(this.hookStats, g[HOOK_RUNTIME_KEY] as Record<string, unknown>);
     } catch (error) {
       constructorError = recordBootstrapError(
         'ExtensionManager.constructor',
@@ -2176,31 +2062,6 @@ export class ExtensionManager {
       }
       this.hookRuntime = this.hookStats;
       this.syncRuntimeStats();
-      g[HOOK_STATS_KEY] = this.hookStats;
-      g[HOOK_RUNTIME_KEY] = {
-        ...(g[HOOK_RUNTIME_KEY] ?? {}),
-        __twe_runtime_signature_v1: HOOK_RUNTIME_SIGNATURE,
-        ...(constructorError ? { bootstrapError: constructorError } : {}),
-        instanceId: this.instanceId,
-        revision: HOOK_REVISION,
-        installedAt: Date.now(),
-        modes: this.runtimeModes,
-        runtimeModeReason: this.runtimeModeReason,
-        hookStats: this.hookStats,
-        messagesTotal: this.hookStats.messagesTotal,
-        messagesLegacyShape: this.hookStats.messagesLegacyShape,
-        messagesMissingContext: this.hookStats.messagesMissingContext,
-        messagesRepairedAtBridge: this.hookStats.messagesRepairedAtBridge,
-        messagesMissingBody: this.hookStats.messagesMissingBody,
-        responsesProcessed: this.hookStats.responsesProcessed,
-        responsesSkippedDuplicate: this.hookStats.responsesSkippedDuplicate,
-        lastMessageAt: this.hookStats.lastMessageAt,
-        activeInstanceId: this.hookStats.activeInstanceId,
-        rev: this.hookStats.rev,
-        endpointStats: this.hookStats.endpointStats,
-        uninstall: () => this.uninstallHooks(),
-      };
-      publishHookGlobals(this.hookStats, g[HOOK_RUNTIME_KEY] as Record<string, unknown>);
     } catch {
       // ignore
     }
@@ -2209,32 +2070,9 @@ export class ExtensionManager {
       this.hookStats = createHookStats(this.instanceId);
       this.hookRuntime = this.hookStats;
       this.syncRuntimeStats();
-      g[HOOK_STATS_KEY] = this.hookStats;
-      g[HOOK_RUNTIME_KEY] = {
-        ...(g[HOOK_RUNTIME_KEY] ?? {}),
-        ...(constructorError ? { bootstrapError: constructorError } : {}),
-        instanceId: this.instanceId,
-        __twe_runtime_signature_v1: HOOK_RUNTIME_SIGNATURE,
-        revision: HOOK_REVISION,
-        installedAt: Date.now(),
-        modes: this.runtimeModes,
-        runtimeModeReason: this.runtimeModeReason,
-        hookStats: this.hookStats,
-        messagesTotal: this.hookStats.messagesTotal,
-        messagesLegacyShape: this.hookStats.messagesLegacyShape,
-        messagesMissingContext: this.hookStats.messagesMissingContext,
-        messagesRepairedAtBridge: this.hookStats.messagesRepairedAtBridge,
-        messagesMissingBody: this.hookStats.messagesMissingBody,
-        responsesProcessed: this.hookStats.responsesProcessed,
-        responsesSkippedDuplicate: this.hookStats.responsesSkippedDuplicate,
-        lastMessageAt: this.hookStats.lastMessageAt,
-        activeInstanceId: this.hookStats.activeInstanceId,
-        rev: this.hookStats.rev,
-        endpointStats: this.hookStats.endpointStats,
-        uninstall: () => this.uninstallHooks(),
-      };
-      publishHookGlobals(this.hookStats, g[HOOK_RUNTIME_KEY] as Record<string, unknown>);
     }
+
+    this.runtimeControlPlane.initialize();
   }
 
   private applyBookmarkRouteCandidate(candidate: BookmarkRouteCandidate | null) {
@@ -2342,6 +2180,10 @@ export class ExtensionManager {
   }
 
   private installBookmarkContextTracking() {
+    if (this.runtimeModes.safeMode || this.runtimeModes.hookMode === 'off') {
+      return;
+    }
+
     this.updateBookmarkRouteContext();
 
     const historyObj = hookGlobalObject.history;
@@ -2350,54 +2192,9 @@ export class ExtensionManager {
     const applyNavigationCandidate = (candidate: BookmarkRouteCandidate | null) => {
       this.applyBookmarkRouteCandidate(candidate);
     };
-    const captureFromNavigation = (args: unknown[]) => {
-      try {
-        const candidate = captureBookmarkRouteFromNavigationArgs(args);
-        if (candidate) {
-          applyNavigationCandidate(candidate);
-          return;
-        }
-      } catch {
-        // ignore
-      }
-      refreshContext();
-    };
-
-    const wrap = (name: 'pushState' | 'replaceState') => {
-      type PatchedNavigationHook = HookCallable & {
-        __twe_is_bookmark_context_patched_v1?: boolean;
-      };
-      const mutableHistory = historyObj as unknown as Record<string, unknown>;
-      const original = mutableHistory[name];
-      if (
-        typeof original !== 'function' ||
-        (original as PatchedNavigationHook).__twe_is_bookmark_context_patched_v1
-      )
-        return;
-
-      const wrapped = function (this: History, ...args: unknown[]) {
-        const result = (original as (...a: unknown[]) => unknown).apply(this, args);
-        captureFromNavigation(args);
-        return result;
-      };
-      (wrapped as PatchedNavigationHook).__twe_is_bookmark_context_patched_v1 = true;
-      try {
-        mutableHistory[name] = wrapped;
-      } catch {
-        try {
-          Object.defineProperty(mutableHistory, name, {
-            value: wrapped,
-            configurable: true,
-            writable: true,
-          });
-        } catch {
-          // ignore
-        }
-      }
-    };
-
-    wrap('pushState');
-    wrap('replaceState');
+    // Do not wrap history methods in Firefox content realm. Cross-realm wrappers
+    // can trigger "Permission denied to access property 'apply'" in X runtime.
+    // Route context is maintained via event listeners + click/DOM observers below.
 
     if (!hookGlobalObject.__twe_bookmark_context_listeners_v1) {
       hookGlobalObject.__twe_bookmark_context_listeners_v1 = true;
@@ -2406,54 +2203,6 @@ export class ExtensionManager {
         addEventListenerSafe(target, 'popstate', refreshContext);
         addEventListenerSafe(target, 'hashchange', refreshContext);
       }
-    }
-
-    const locationObj = (hookGlobalObject as unknown as { location?: Location }).location;
-    if (locationObj) {
-      const locationAny = locationObj as unknown as {
-        assign?: (url: string | URL) => void;
-        replace?: (url: string | URL) => void;
-      };
-
-      const wrapLocation = (methodName: 'assign' | 'replace'): void => {
-        const original = locationAny[methodName];
-        if (typeof original !== 'function') return;
-        if (
-          (original as { __twe_is_bookmark_context_patched_v1?: boolean })
-            .__twe_is_bookmark_context_patched_v1
-        ) {
-          return;
-        }
-        const wrapped = function (url: string | URL): void {
-          const value = typeof url === 'string' ? url : url.toString();
-          try {
-            original.call(locationObj as Location, value);
-          } catch {
-            // Some pages lock location methods; avoid crashing the script.
-          }
-          refreshContext();
-        };
-        (
-          wrapped as { __twe_is_bookmark_context_patched_v1?: boolean }
-        ).__twe_is_bookmark_context_patched_v1 = true;
-        try {
-          locationAny[methodName] = wrapped;
-        } catch {
-          try {
-            if (typeof Object.defineProperty === 'function') {
-              Object.defineProperty(locationAny, methodName, {
-                value: wrapped,
-                configurable: true,
-                writable: true,
-              });
-            }
-          } catch {
-            // ignore
-          }
-        }
-      };
-      wrapLocation('assign');
-      wrapLocation('replace');
     }
 
     if (!hookGlobalObject.__twe_bookmark_context_bookmark_click_v1 && document?.body) {
@@ -2592,6 +2341,10 @@ export class ExtensionManager {
   }
 
   private installPageMessageBridge() {
+    if (this.runtimeModes.hookMode === 'off') {
+      return;
+    }
+
     // Listen for page-realm hook events. We keep interceptors in content realm,
     // and only pass serializable data across via postMessage.
     if (this.pageMessageHandler) return;
@@ -2807,6 +2560,12 @@ export class ExtensionManager {
       return;
     }
 
+    this.refreshHookDebugConfig();
+    const hookDebug = this.hookDebugConfig;
+    this.emitHookDiag('xhr.install.begin', { force, ...hookDebug });
+    if (hookDebug.disableXhrLoadListener) {
+      this.emitHookDiag('xhr.load.listener.disabled', {}, { force: true });
+    }
     let hookInstalled = false;
     let originalOpen: unknown;
     try {
@@ -2846,49 +2605,111 @@ export class ExtensionManager {
         throw new Error('XMLHttpRequest.prototype.send not available');
       }
 
-      const sendNeedsRepair = force || !hasHookVersion(currentSend, '__twe_is_hook_send_v1');
-      if (sendNeedsRepair) {
+      const sendNeedsRepair =
+        !hookDebug.disableXhrSendWrap &&
+        (force || !hasHookVersion(currentSend, '__twe_is_hook_send_v1'));
+      if (hookDebug.disableXhrSendWrap) {
+        if (typeof proto[ORIG_XHR_SEND_KEY] === 'function') {
+          proto.send = proto[ORIG_XHR_SEND_KEY] as XMLHttpRequest['send'];
+        }
+        hookInstalled = true;
+        this.emitHookDiag('xhr.send.wrap.disabled', {}, { force: true });
+      } else if (sendNeedsRepair) {
+        const emitHookDiag = this.emitHookDiag.bind(this);
+        const enableSafeMode = this.enableSafeMode.bind(this);
         const sendWrapper = function (
           this: XMLHttpRequest,
           body?: Document | XMLHttpRequestBodyInit | null,
         ): void {
+          let reqUrl = '';
+          let reqMethod = 'GET';
+          let requestId = '';
           try {
             const xhr = this as HookedXhr;
-            const reqMethod = String(xhr.__twe_req_method_v1 || 'GET');
-            const requestId =
-              typeof xhr.__twe_req_id_v1 === 'string'
-                ? xhr.__twe_req_id_v1
-                : nextBookmarkRequestId();
-            xhr.__twe_req_id_v1 = requestId;
-            xhr.__twe_req_body_v1 = serializeRequestBodyText(body as unknown);
-            if (typeof body === 'undefined') {
-              xhr.__twe_req_body_v1 = '';
-            }
-            if (xhr.__twe_req_url_v1) {
+            const meta = loadXhrRequestMeta(xhr, hookDebug);
+            reqMethod = String(meta.method || 'GET');
+            requestId = meta.requestId || nextBookmarkRequestId();
+            meta.requestId = requestId;
+            meta.body = serializeRequestBodyText(body as unknown) ?? '';
+            reqUrl = String(meta.url || '');
+            if (reqUrl) {
               const requestMeta = {
                 method: reqMethod,
-                url: String(xhr.__twe_req_url_v1),
-                body: xhr.__twe_req_body_v1,
+                url: reqUrl,
+                body: meta.body,
                 requestId,
               };
-              if (isBookmarksApiRequest(String(xhr.__twe_req_url_v1))) {
-                xhr.__twe_req_bookmark_context_v1 = resolveRequestBookmarkContext(
-                  xhr.__twe_req_url_v1,
-                  xhr.__twe_req_body_v1,
+              if (isBookmarksApiRequest(reqUrl)) {
+                meta.bookmarkContext = resolveRequestBookmarkContext(
+                  reqUrl,
+                  meta.body,
                   requestMeta,
                 );
-                setBookmarkContext(xhr.__twe_req_bookmark_context_v1);
+                setBookmarkContext(meta.bookmarkContext);
               } else {
-                xhr.__twe_req_bookmark_context_v1 = null;
+                meta.bookmarkContext = null;
               }
             }
+            storeXhrRequestMeta(xhr, hookDebug, meta);
           } catch {
             // ignore
           }
-          (sendBase as typeof sendWrapper).apply(this, [body as never]);
+
+          try {
+            if (hookDebug.forceCallNotApply) {
+              (sendBase as typeof sendWrapper).call(this, body as never);
+            } else {
+              (sendBase as typeof sendWrapper).apply(this, [body as never]);
+            }
+            emitHookDiag('xhr.send.basecall.ok', {
+              method: reqMethod,
+              url: reqUrl,
+            });
+          } catch {
+            try {
+              const recoveredResult = hookDebug.forceCallNotApply
+                ? (sendBase as typeof sendWrapper).apply(this, [body as never])
+                : (sendBase as typeof sendWrapper).call(this, body as never);
+              emitHookDiag(
+                'xhr.send.basecall.recovered',
+                {
+                  method: reqMethod,
+                  url: reqUrl,
+                },
+                { force: true },
+              );
+              return recoveredResult;
+            } catch (fallbackErr) {
+              emitHookDiag(
+                'xhr.send.basecall.error',
+                {
+                  method: reqMethod,
+                  url: reqUrl,
+                  requestId,
+                  errName: fallbackErr instanceof Error ? fallbackErr.name : typeof fallbackErr,
+                  errMsg: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+                },
+                { force: true },
+              );
+              logger.error('XHR send hook base invocation failed; enabling safe mode', {
+                method: reqMethod,
+                url: reqUrl,
+                err: fallbackErr,
+              });
+              try {
+                enableSafeMode('xhr-send-basecall-failed', fallbackErr);
+              } catch {
+                // ignore
+              }
+              throw fallbackErr;
+            }
+          }
         };
         markHookFunction(sendWrapper, '__twe_is_hook_send_v1');
-        defineOn(proto, 'send', sendWrapper);
+        const sendInstalled = defineOn(proto, 'send', sendWrapper);
+        if (!sendInstalled) {
+          throw new Error('Failed to define XMLHttpRequest.send hook safely');
+        }
         markHookFunction((proto as { send?: unknown }).send, '__twe_is_hook_send_v1');
         hookInstalled = true;
       } else {
@@ -2897,8 +2718,9 @@ export class ExtensionManager {
 
       if (
         !force &&
+        !hookDebug.disableXhrOpenWrap &&
         hasHookVersion(currentOpen, '__twe_is_hook_open_v1') &&
-        hasHookVersion(currentSend, '__twe_is_hook_send_v1')
+        (hookDebug.disableXhrSendWrap || hasHookVersion(currentSend, '__twe_is_hook_send_v1'))
       ) {
         hookInstalled = true;
       } else {
@@ -2918,101 +2740,162 @@ export class ExtensionManager {
           throw new Error('XMLHttpRequest.prototype.open base function unavailable');
         }
 
-        const openWrapper = function (this: XMLHttpRequest, ...args: unknown[]): unknown {
-          try {
-            const method = typeof args[0] === 'string' ? args[0] : String(args[0] ?? '');
-            const rawUrl = args[1];
-            const nextUrl = typeof rawUrl === 'string' ? rawUrl : String(rawUrl ?? '');
+        if (hookDebug.disableXhrOpenWrap) {
+          proto.open = openBase;
+          this.emitHookDiag('xhr.open.wrap.disabled', {}, { force: true });
+          hookInstalled = true;
+        } else {
+          const emitHookDiag = this.emitHookDiag.bind(this);
+          const enableSafeMode = this.enableSafeMode.bind(this);
+          const openWrapper = function (this: XMLHttpRequest, ...args: unknown[]): unknown {
+            let reqMethod = '';
+            let reqUrl = '';
+            let requestId = '';
+            try {
+              reqMethod = typeof args[0] === 'string' ? args[0] : String(args[0] ?? '');
+              const rawUrl = args[1];
+              reqUrl = typeof rawUrl === 'string' ? rawUrl : String(rawUrl ?? '');
 
-            // Keep this wrapper completely page-realm safe:
-            // do not touch content-realm objects (logger/manager/etc), and never throw.
-            if (nextUrl && /\/graphql\/|\/api\/1\.1\//.test(nextUrl)) {
-              const self = this as HookedXhr;
-              self.__twe_req_method_v1 = method;
-              self.__twe_req_url_v1 = nextUrl;
-              self.__twe_req_body_v1 = '';
-              self.__twe_req_id_v1 = nextBookmarkRequestId();
-              if (isBookmarksApiRequest(nextUrl)) {
-                self.__twe_req_bookmark_context_v1 = resolveRequestBookmarkContext(
-                  nextUrl,
-                  undefined,
-                  {
-                    method,
-                    url: nextUrl,
-                    requestId: self.__twe_req_id_v1,
-                  },
-                );
-                setBookmarkContext(self.__twe_req_bookmark_context_v1);
-              } else {
-                self.__twe_req_bookmark_context_v1 = null;
+              if (isCaptureCandidateApiUrl(reqUrl)) {
+                const self = this as HookedXhr;
+                const meta = loadXhrRequestMeta(self, hookDebug);
+                requestId = meta.requestId || nextBookmarkRequestId();
+                meta.requestId = requestId;
+                meta.method = reqMethod;
+                meta.url = reqUrl;
+                meta.body = '';
+                if (isBookmarksApiRequest(reqUrl)) {
+                  meta.bookmarkContext = resolveRequestBookmarkContext(reqUrl, undefined, {
+                    method: reqMethod,
+                    url: reqUrl,
+                    requestId: meta.requestId,
+                  });
+                  setBookmarkContext(meta.bookmarkContext);
+                } else {
+                  meta.bookmarkContext = null;
+                }
+                if (!hookDebug.disableXhrLoadListener && !meta.hooked) {
+                  meta.hooked = true;
+                  this.addEventListener('load', function (this: XMLHttpRequest) {
+                    try {
+                      const xhr = this as HookedXhr;
+                      const reqMeta = loadXhrRequestMeta(xhr, hookDebug);
+                      const methodFallback = reqMethod || 'GET';
+                      const urlFallback = reqUrl;
+                      const loadMethod = reqMeta.method || methodFallback;
+                      const loadUrl = reqMeta.url || urlFallback;
+                      if (!isCaptureCandidateApiUrl(loadUrl)) return;
+                      const responseText = String((this as XMLHttpRequest).responseText ?? '');
+                      const loadBody = reqMeta.body;
+                      const loadRequestId = reqMeta.requestId || nextBookmarkRequestId();
+                      reqMeta.requestId = loadRequestId;
+                      const bookmarkRequest = isBookmarksApiRequest(loadUrl);
+                      const requestContext =
+                        reqMeta.bookmarkContext ||
+                        (bookmarkRequest
+                          ? resolveRequestBookmarkContext(loadUrl, loadBody, {
+                              method: loadMethod,
+                              url: loadUrl,
+                              body: loadBody,
+                              requestId: loadRequestId,
+                            })
+                          : null);
+                      if (!reqMeta.bookmarkContext) {
+                        reqMeta.bookmarkContext = requestContext;
+                      }
+                      storeXhrRequestMeta(xhr, hookDebug, reqMeta);
+                      if (bookmarkRequest && requestContext) {
+                        setBookmarkContext(requestContext);
+                      }
+                      const normalizedReq = buildNormalizedHookMessageRequest({
+                        method: loadMethod,
+                        url: loadUrl,
+                        body: loadBody || '',
+                        bookmarkContext: requestContext ?? null,
+                        requestId: loadRequestId,
+                      });
+                      postHookMessage({
+                        __twe_mcp_hook_v1: true,
+                        req: normalizedReq,
+                        res: { status: (this as XMLHttpRequest).status ?? 0, responseText },
+                      });
+                    } catch {
+                      // Never throw from XHR hooks; it can break the feed.
+                    }
+                  });
+                }
+                storeXhrRequestMeta(self, hookDebug, meta);
               }
-              if (!self.__twe_hooked_v1) {
-                self.__twe_hooked_v1 = true;
-                this.addEventListener('load', function (this: XMLHttpRequest) {
-                  try {
-                    const xhr = this as HookedXhr;
-                    const reqMethod = xhr.__twe_req_method_v1 || method;
-                    const reqUrl = xhr.__twe_req_url_v1 || nextUrl;
-                    if (!reqUrl || !/\/graphql\/|\/api\/1\.1\//.test(reqUrl)) return;
-                    const responseText = String((this as XMLHttpRequest).responseText ?? '');
-                    const reqBody = xhr.__twe_req_body_v1;
-                    const reqId =
-                      typeof xhr.__twe_req_id_v1 === 'string'
-                        ? xhr.__twe_req_id_v1
-                        : nextBookmarkRequestId();
-                    xhr.__twe_req_id_v1 = reqId;
-                    const bookmarkRequest = isBookmarksApiRequest(reqUrl);
-                    const reqContext =
-                      xhr.__twe_req_bookmark_context_v1 ||
-                      (bookmarkRequest
-                        ? resolveRequestBookmarkContext(reqUrl, reqBody, {
-                            method: reqMethod,
-                            url: reqUrl,
-                            body: reqBody,
-                            requestId: reqId,
-                          })
-                        : null);
-                    if (!xhr.__twe_req_bookmark_context_v1) {
-                      xhr.__twe_req_bookmark_context_v1 = reqContext;
-                    }
-                    if (bookmarkRequest && reqContext) {
-                      setBookmarkContext(reqContext);
-                    }
-                    const normalizedReq = buildNormalizedHookMessageRequest({
-                      method: reqMethod,
-                      url: reqUrl,
-                      body: reqBody || '',
-                      bookmarkContext: reqContext ?? null,
-                      requestId: reqId,
-                    });
-                    postHookMessage({
-                      __twe_mcp_hook_v1: true,
-                      req: normalizedReq,
-                      res: { status: (this as XMLHttpRequest).status ?? 0, responseText },
-                    });
-                  } catch {
-                    // Never throw from XHR hooks; it can break the feed.
-                  }
+            } catch {
+              // Never throw from XHR hooks; it can break the feed.
+            }
+
+            try {
+              const result = hookDebug.forceCallNotApply
+                ? callFunctionWithArgs(openBase as HookCallable, this, args)
+                : (openBase as typeof openWrapper).apply(this, args as never);
+              emitHookDiag('xhr.open.basecall.ok', {
+                method: reqMethod,
+                url: reqUrl,
+              });
+              return result;
+            } catch {
+              try {
+                const recoveredResult = hookDebug.forceCallNotApply
+                  ? (openBase as typeof openWrapper).apply(this, args as never)
+                  : callFunctionWithArgs(openBase as HookCallable, this, args);
+                emitHookDiag(
+                  'xhr.open.basecall.recovered',
+                  {
+                    method: reqMethod,
+                    url: reqUrl,
+                  },
+                  { force: true },
+                );
+                return recoveredResult;
+              } catch (fallbackErr) {
+                emitHookDiag(
+                  'xhr.open.basecall.error',
+                  {
+                    method: reqMethod,
+                    url: reqUrl,
+                    requestId,
+                    errName: fallbackErr instanceof Error ? fallbackErr.name : typeof fallbackErr,
+                    errMsg:
+                      fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+                  },
+                  { force: true },
+                );
+                logger.error('XHR open hook base invocation failed; enabling safe mode', {
+                  method: reqMethod,
+                  url: reqUrl,
+                  err: fallbackErr,
                 });
+                try {
+                  enableSafeMode('xhr-open-basecall-failed', fallbackErr);
+                } catch {
+                  // ignore
+                }
+                throw fallbackErr;
               }
             }
-          } catch {
-            // Never throw from XHR hooks; it can break the feed.
+          };
+          markHookFunction(openWrapper, '__twe_is_hook_open_v1');
+          const openInstalled = defineOn(proto, 'open', openWrapper);
+          if (!openInstalled) {
+            throw new Error('Failed to define XMLHttpRequest.open hook safely');
           }
+          hookInstalled = true;
+          markHookFunction((proto as { open?: unknown }).open, '__twe_is_hook_open_v1');
+          markHookFunction((proto as { send?: unknown }).send, '__twe_is_hook_send_v1');
+        }
 
-          return (openBase as typeof openWrapper).apply(this, args as never);
-        };
-        markHookFunction(openWrapper, '__twe_is_hook_open_v1');
         proto[ORIG_XHR_OPEN_KEY] = openBase;
         proto[ORIG_XHR_SEND_KEY] = sendBase;
-        if (defineOn(proto, 'open', openWrapper)) {
-          hookInstalled = true;
-        }
-        markHookFunction((proto as { open?: unknown }).open, '__twe_is_hook_open_v1');
-        markHookFunction((proto as { send?: unknown }).send, '__twe_is_hook_send_v1');
       }
     } catch (err) {
       logger.error('Failed to hook into XMLHttpRequest', err);
+      this.enableSafeMode('xhr-hook-install-failed', err);
     }
 
     if (this.debugEnabled) {
@@ -3051,40 +2934,126 @@ export class ExtensionManager {
       return;
     }
 
-    const fetchNative = (hookGlobalObject as Record<string, unknown>).fetch;
+    this.refreshHookDebugConfig();
+    const hookDebug = this.hookDebugConfig;
+    this.emitHookDiag('fetch.install.begin', { force, ...hookDebug });
+    const hookTarget = getHookGlobalObject() as unknown as Record<string, unknown>;
+    const fetchNative = hookTarget.fetch;
     if (typeof fetchNative !== 'function') {
       logger.warn('Fetch API not found, skipping fetch hooks');
       return;
     }
 
-    const existingFetch = (hookGlobalObject as Record<string, unknown>).fetch;
+    const pageAny = hookTarget;
+    const existingFetch = hookTarget.fetch;
     if (!force && hasHookVersion(existingFetch, '__twe_is_hook_fetch_v1')) {
       logger.debug('Fetch hook already installed');
       return;
     }
 
+    const existingStoredBase = pageAny[ORIG_FETCH_KEY];
     const fetchBaseFromState = getFunctionFromHookState(
       existingFetch,
       '__twe_is_hook_fetch_v1',
       ORIG_FETCH_KEY,
     );
-    const fetchBase =
-      typeof fetchBaseFromState === 'function'
-        ? (fetchBaseFromState as typeof fetch)
-        : (fetchNative as typeof fetch);
+    const fetchBaseCandidate =
+      [existingStoredBase, fetchBaseFromState, fetchNative].find(isUsableFetchBaseCandidate) ??
+      null;
+    if (!fetchBaseCandidate) {
+      logger.error('Fetch API base function unavailable or unsafe; enabling safe mode');
+      this.enableSafeMode('fetch-hook-base-unavailable');
+      return;
+    }
+    const fetchBase = fetchBaseCandidate as typeof fetch;
 
-    if (typeof fetchBase !== 'function') {
-      logger.warn('Fetch API base function unavailable');
+    if (hookDebug.disableFetchWrap) {
+      hookTarget.fetch = fetchBase;
+      this.emitHookDiag('fetch.wrap.disabled', {}, { force: true });
       return;
     }
 
-    const pageAny = hookGlobalObject as Record<string, unknown>;
     pageAny[ORIG_FETCH_KEY] = fetchBase;
+    const emitHookDiag = this.emitHookDiag.bind(this);
+    const enableSafeMode = this.enableSafeMode.bind(this);
+    let fetchHookFatal = false;
+    let preferredFetchContext: unknown = hookTarget;
+    const callNativeFetchFallback = (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+      argCount = 2,
+    ): Promise<Response> => {
+      try {
+        if (argCount <= 1) {
+          return fetchBase(input) as Promise<Response>;
+        }
+        return fetchBase(input, init) as Promise<Response>;
+      } catch (fallbackErr) {
+        return Promise.reject(fallbackErr);
+      }
+    };
 
-    const fetchWrapper = async function (
+    const invokeFetchWithContexts = (
+      fn: typeof fetch,
+      contexts: unknown[],
+      input: RequestInfo | URL,
+      init?: RequestInit,
+      argCount = 2,
+    ): Promise<Response> => {
+      const args: unknown[] = argCount <= 1 ? [input] : [input, init];
+      let lastError: unknown = null;
+      for (const ctx of contexts) {
+        if (!ctx) continue;
+        try {
+          const response = callFunctionWithArgs(
+            fn as unknown as (...args: unknown[]) => unknown,
+            ctx,
+            args,
+          ) as Promise<Response>;
+          preferredFetchContext = ctx;
+          return response;
+        } catch (err) {
+          lastError = err;
+        }
+
+        if (!hookDebug.forceCallNotApply) {
+          try {
+            const response = Reflect.apply(
+              fn as unknown as (...args: unknown[]) => Promise<Response>,
+              ctx,
+              args,
+            ) as Promise<Response>;
+            preferredFetchContext = ctx;
+            return response;
+          } catch (err) {
+            lastError = err;
+          }
+        }
+      }
+
+      // Direct invocation is last resort because it can create cross-realm
+      // Promise objects that page code cannot safely consume in Firefox.
+      try {
+        if (argCount <= 1) {
+          return fn(input) as Promise<Response>;
+        }
+        return fn(input, init) as Promise<Response>;
+      } catch (err) {
+        lastError = err;
+      }
+
+      if (lastError instanceof Error) {
+        throw lastError;
+      }
+      throw new Error(`fetch invocation failed (${getSafeErrorInfo(lastError).summary})`);
+    };
+
+    const fetchWrapper = function (
+      this: unknown,
       input: RequestInfo | URL,
       init?: RequestInit,
     ): Promise<Response> {
+      const fetchArgCount = arguments.length <= 1 ? 1 : 2;
       let method = 'GET';
       let url = '';
       let serializedBody: string | undefined;
@@ -3092,22 +3061,13 @@ export class ExtensionManager {
       let requestContext: BookmarkContextPayload | undefined;
 
       try {
-        method =
-          init?.method ??
-          (typeof Request !== 'undefined' && input instanceof Request ? input.method : 'GET');
+        method = extractFetchLikeMethod(input, init);
       } catch {
         method = init?.method ?? 'GET';
       }
 
       try {
-        url =
-          typeof input === 'string'
-            ? input
-            : typeof URL !== 'undefined' && input instanceof URL
-              ? input.toString()
-              : typeof Request !== 'undefined' && input instanceof Request
-                ? input.url
-                : '';
+        url = extractFetchLikeUrl(input);
       } catch {
         url = '';
       }
@@ -3123,6 +3083,7 @@ export class ExtensionManager {
       } catch {
         requestId = '';
       }
+      emitHookDiag('fetch.wrapper.enter', { method, url, requestId });
 
       try {
         if (isBookmarksApiRequest(url)) {
@@ -3141,145 +3102,310 @@ export class ExtensionManager {
         logger.debug('fetch request context capture failed', { method, url, err });
       }
 
-      const origFetch = pageAny[ORIG_FETCH_KEY] ?? fetchBase;
-      // Use call() to avoid illegal invocation issues.
-      if (typeof origFetch !== 'function') {
-        throw new Error('fetch base function unavailable');
+      const shouldObserveResponse = isCaptureCandidateApiUrl(url);
+      if (!shouldObserveResponse) {
+        return callNativeFetchFallback(input, init, fetchArgCount);
       }
-      const response = await (origFetch as typeof fetch).call(globalThis, input, init);
 
+      let responsePromise: Promise<Response>;
       try {
-        if (!url || !/\/graphql\/|\/api\/1\.1\//.test(url)) return response;
-
-        const contentType = response.headers.get('content-type') ?? '';
-        const isTextualResponse =
-          !contentType || contentType.includes('json') || contentType.startsWith('text/');
-
-        if (!isTextualResponse) {
-          return response;
+        const origFetch = pageAny[ORIG_FETCH_KEY] ?? fetchBase;
+        if (typeof origFetch !== 'function' || hasHookShape(origFetch, '__twe_is_hook_fetch_v1')) {
+          throw new Error('fetch base function unavailable');
+        }
+        const callContextsRaw: unknown[] = [this, preferredFetchContext, hookTarget];
+        if (typeof window !== 'undefined') {
+          callContextsRaw.push(window);
+        }
+        callContextsRaw.push(globalThis);
+        const callContexts: unknown[] = [];
+        const seenContexts = new Set<unknown>();
+        for (const ctx of callContextsRaw) {
+          if (!ctx || seenContexts.has(ctx)) continue;
+          seenContexts.add(ctx);
+          callContexts.push(ctx);
         }
 
-        // Read response body from a clone to avoid consuming the original stream.
-        void response
-          .clone()
-          .text()
-          .then((responseText: string) => {
-            if (!responseText) return;
-            try {
-              const normalizedReq = buildNormalizedHookMessageRequest({
-                method,
-                url,
-                body: serializedBody || '',
-                bookmarkContext: requestContext ?? null,
-                requestId,
-              });
-
-              postHookMessage({
-                __twe_mcp_hook_v1: true,
-                req: normalizedReq,
-                res: { status: response.status, responseText },
-              });
-            } catch {
-              // ignore
-            }
-          })
-          .catch((err: unknown) => {
-            logger.debug('fetch clone.text() failed', { method, url, err });
-          });
+        responsePromise = invokeFetchWithContexts(
+          origFetch as typeof fetch,
+          callContexts,
+          input,
+          init,
+          fetchArgCount,
+        );
       } catch (err) {
-        // Never throw after native fetch succeeds.
-        logger.debug('fetch response hook processing failed', { method, url, err });
+        const errInfo = getSafeErrorInfo(err);
+        // If hook invocation is unhealthy, fail closed quickly and switch to safe mode.
+        emitHookDiag('fetch.basecall.error', {
+          method,
+          url,
+          requestId,
+          errName: errInfo.name,
+          errMsg: errInfo.message,
+        });
+        if (!fetchHookFatal) {
+          fetchHookFatal = true;
+          logger.error('Fetch hook base invocation failed; enabling safe mode', {
+            method,
+            url,
+            err: errInfo.summary,
+          });
+          try {
+            enableSafeMode('fetch-hook-invocation-failed', errInfo.summary);
+          } catch {
+            // ignore
+          }
+        }
+        return callNativeFetchFallback(input, init, fetchArgCount).catch((fallbackErr) => {
+          const fallbackInfo = getSafeErrorInfo(fallbackErr);
+          emitHookDiag(
+            'fetch.fallback.error',
+            {
+              method,
+              url,
+              requestId,
+              errName: fallbackInfo.name,
+              errMsg: fallbackInfo.message,
+            },
+            { force: true },
+          );
+          throw fallbackErr ?? errInfo.summary;
+        });
       }
 
-      return response;
+      try {
+        void responsePromise
+          .then(
+            (response) => {
+              try {
+                emitHookDiag('fetch.basecall.ok', { method, url });
+
+                const contentType = response.headers.get('content-type') ?? '';
+                const isTextualResponse =
+                  !contentType || contentType.includes('json') || contentType.startsWith('text/');
+
+                if (!isTextualResponse) {
+                  return;
+                }
+
+                // Read response body from a clone to avoid consuming the original stream.
+                void response
+                  .clone()
+                  .text()
+                  .then((responseText: string) => {
+                    if (!responseText) return;
+                    try {
+                      const normalizedReq = buildNormalizedHookMessageRequest({
+                        method,
+                        url,
+                        body: serializedBody || '',
+                        bookmarkContext: requestContext ?? null,
+                        requestId,
+                      });
+
+                      postHookMessage({
+                        __twe_mcp_hook_v1: true,
+                        req: normalizedReq,
+                        res: { status: response.status, responseText },
+                      });
+                    } catch {
+                      // ignore
+                    }
+                  })
+                  .catch((err: unknown) => {
+                    const errInfo = getSafeErrorInfo(err);
+                    logger.debug('fetch clone.text() failed', {
+                      method,
+                      url,
+                      err: errInfo.summary,
+                    });
+                  });
+              } catch (err) {
+                const errInfo = getSafeErrorInfo(err);
+                logger.debug('fetch response hook observer callback failed', {
+                  method,
+                  url,
+                  err: errInfo.summary,
+                });
+              }
+            },
+            (err) => {
+              const errInfo = getSafeErrorInfo(err);
+              emitHookDiag('fetch.basecall.error', {
+                method,
+                url,
+                requestId,
+                errName: errInfo.name,
+                errMsg: errInfo.message,
+              });
+              if (!fetchHookFatal) {
+                fetchHookFatal = true;
+                logger.error('Fetch hook base invocation failed; enabling safe mode', {
+                  method,
+                  url,
+                  err: errInfo.summary,
+                });
+                try {
+                  enableSafeMode('fetch-hook-invocation-failed', errInfo.summary);
+                } catch {
+                  // ignore
+                }
+              }
+            },
+          )
+          .catch((err: unknown) => {
+            const errInfo = getSafeErrorInfo(err);
+            logger.debug('fetch response hook observer promise failed', {
+              method,
+              url,
+              err: errInfo.summary,
+            });
+          });
+      } catch (err) {
+        const errInfo = getSafeErrorInfo(err);
+        // Never throw after native fetch succeeds.
+        logger.debug('fetch response hook observer setup failed', {
+          method,
+          url,
+          err: errInfo.summary,
+        });
+      }
+
+      return responsePromise;
     };
     markHookFunction(fetchWrapper, '__twe_is_hook_fetch_v1');
 
     const ok = defineOn(pageAny as object, 'fetch', fetchWrapper);
+    if (!ok) {
+      this.enableSafeMode('fetch-hook-define-failed');
+      return;
+    }
     markHookFunction((pageAny as { fetch?: unknown }).fetch, '__twe_is_hook_fetch_v1');
+    this.emitHookDiag(
+      'fetch.install.ok',
+      {
+        hasHookMarker: hasHookVersion(
+          (pageAny as { fetch?: unknown }).fetch,
+          '__twe_is_hook_fetch_v1',
+        ),
+      },
+      { force: true },
+    );
     if (ok && this.debugEnabled) {
       logger.info('Hooked into fetch');
     }
+    if (ok) {
+      this.startFetchHookBootProbe(1200);
+    }
   }
 
-  private startHookRepairLoop() {
-    if (this.runtimeModes.safeMode || this.runtimeModes.repairMode === 'off') {
+  private runFetchHookBootProbePass() {
+    if (this.runtimeModes.safeMode || !this.isHookModeEnabled('fetch')) {
       return;
     }
 
-    if (this.hookRepairInterval !== null) {
+    const hookTarget = getHookGlobalObject() as unknown as Record<string, unknown>;
+    const fetchCandidate = hookTarget.fetch;
+    if (typeof fetchCandidate !== 'function') {
+      this.enableSafeMode('fetch-hook-probe-missing-fetch');
       return;
     }
+    this.emitHookDiag(
+      'fetch.bootprobe.begin',
+      {
+        hasHookMarker: hasHookVersion(fetchCandidate, '__twe_is_hook_fetch_v1'),
+      },
+      { force: true },
+    );
 
-    const schedule = (delayMs: number) => {
-      this.hookRepairInterval = setTimeout(() => {
-        this.hookRepairInterval = null;
-        repair();
-      }, delayMs);
-    };
+    const probe = async () => {
+      const contexts: unknown[] = [hookTarget];
+      if (typeof window !== 'undefined') {
+        contexts.push(window);
+      }
+      contexts.push(globalThis);
+      const probeUrl = (
+        typeof location !== 'undefined' && location.origin
+          ? `${location.origin}/favicon.ico?__twe_fetch_probe=1`
+          : 'https://x.com/favicon.ico?__twe_fetch_probe=1'
+      ) as RequestInfo | URL;
 
-    const repair = () => {
-      if (this.runtimeModes.safeMode || this.runtimeModes.repairMode === 'off') {
+      let lastError: unknown = null;
+      try {
+        const response = (await (fetchCandidate as typeof fetch)(probeUrl)) as Response;
+        await response.text().catch(() => '');
+        if (this.debugEnabled) {
+          logger.debug('Fetch hook boot probe passed');
+        }
+        this.emitHookDiag('fetch.bootprobe.ok', {});
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+
+      for (const ctx of contexts) {
+        try {
+          const response = this.hookDebugConfig.forceCallNotApply
+            ? ((await (fetchCandidate as typeof fetch).call(ctx as unknown, probeUrl)) as Response)
+            : ((await Reflect.apply(
+                fetchCandidate as unknown as (...args: unknown[]) => Promise<Response>,
+                ctx,
+                [probeUrl],
+              )) as Response);
+          await response.text().catch(() => '');
+          if (this.debugEnabled) {
+            logger.debug('Fetch hook boot probe passed');
+          }
+          this.emitHookDiag('fetch.bootprobe.ok', {});
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      const lastErrorInfo = getSafeErrorInfo(lastError);
+      this.emitHookDiag(
+        'fetch.bootprobe.error',
+        {
+          errName: lastErrorInfo.name,
+          errMsg: lastErrorInfo.message,
+        },
+        { force: true },
+      );
+      if (isLikelyCrossRealmPermissionError(lastError)) {
+        logger.warn(
+          'Fetch boot probe hit cross-realm permission error; keeping fetch hook active',
+          lastErrorInfo.summary,
+        );
         return;
       }
-
-      try {
-        if (this.hookStats) {
-          this.hookStats.repairCount += 1;
-          this.syncRuntimeStats();
-        }
-
-        if (this.isHookModeEnabled('xhr')) {
-          this.installHttpHooks(true);
-        }
-        if (this.isHookModeEnabled('fetch')) {
-          this.installFetchHooks(true);
-        }
-
-        const hookSelfTest = this.runHookSelfTest();
-        if (!hookSelfTest.ok) {
-          this.enableSafeMode('hook-repair-self-test-failed', hookSelfTest.error);
-          return;
-        }
-
-        this.hookRepairFailures = 0;
-        this.hookRepairBackoffMs = HOOK_REPAIR_INTERVAL_MS;
-      } catch (err) {
-        this.hookRepairFailures += 1;
-        this.hookRepairBackoffMs = Math.min(
-          this.hookRepairBackoffMs * 2,
-          HOOK_REPAIR_BACKOFF_MAX_MS,
-        );
-        logger.warn(
-          `Hook repair failed (${this.hookRepairFailures}/${HOOK_REPAIR_FAILURE_LIMIT})`,
-          err,
-        );
-        if (this.hookRepairFailures >= HOOK_REPAIR_FAILURE_LIMIT) {
-          this.enableSafeMode('hook-repair-failure-limit', err);
-          return;
-        }
-      }
-
-      schedule(this.hookRepairBackoffMs);
+      this.enableSafeMode('fetch-hook-probe-failed', lastError);
     };
 
-    schedule(0);
+    void probe();
+  }
+
+  private startFetchHookBootProbe(delayMs = 1200) {
+    this.runtimeControlPlane.startFetchHookBootProbe(delayMs);
+  }
+
+  private runHookRepairPass(): { ok: boolean; error?: string } {
+    if (this.hookStats) {
+      this.hookStats.repairCount += 1;
+      this.syncRuntimeStats();
+    }
+
+    if (this.isHookModeEnabled('xhr')) {
+      this.installHttpHooks(true);
+    }
+    if (this.isHookModeEnabled('fetch')) {
+      this.installFetchHooks(true);
+    }
+
+    return this.runHookSelfTest();
   }
 
   private runInterceptors(req: InterceptedRequest, res: XMLHttpRequest) {
-    // Run current enabled interceptors. Wrap each in try/catch so a single
-    // interceptor error cannot break the page behavior.
-    this.getExtensions()
-      .filter((ext) => ext.enabled)
-      .forEach((ext) => {
-        try {
-          const func = ext.intercept();
-          if (func) {
-            func(req, res, ext);
-          }
-        } catch (err) {
-          logger.error(`Interceptor error (${ext.name}):`, err);
-        }
-      });
+    this.interceptorDispatcher.dispatch(this.getExtensions(), req, res);
   }
 }

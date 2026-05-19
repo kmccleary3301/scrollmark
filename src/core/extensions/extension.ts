@@ -13,8 +13,16 @@ export type ExtensionUIComponentType = ComponentType<{ extension: Extension }> |
 /**
  * HTTP response interceptor.
  */
+export interface InterceptorRequest extends Pick<Request, 'method' | 'url'> {
+  body?: string;
+  requestId?: string;
+  bookmarkContext?: unknown;
+  __twe_hook_revision_v1?: number;
+  hookRevision?: number;
+}
+
 export type Interceptor = (
-  request: Pick<Request, 'method' | 'url'>,
+  request: InterceptorRequest,
   response: XMLHttpRequest,
   extension: Extension,
 ) => void;

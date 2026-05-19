@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "classes": {
+    "public": {
+      "description": "Low sensitivity default timeline/search/profile/list/community surfaces."
+    },
+    "sensitive": {
+      "description": "Higher sensitivity surfaces that may include richer relationship/activity metadata."
+    },
+    "dm": {
+      "description": "Direct message surfaces requiring strict opt-in and encrypted storage readiness."
+    }
+  },
+  "route_policies": {
+    "home": "public",
+    "bookmarks": "sensitive",
+    "tweet_detail": "public",
+    "notifications": "sensitive",
+    "search_top": "public",
+    "search_latest": "public",
+    "search_people": "public",
+    "search_media": "public",
+    "list": "public",
+    "list_members": "public",
+    "list_subscribers": "public",
+    "community": "public",
+    "community_members": "public",
+    "followers": "sensitive",
+    "following": "sensitive",
+    "user_profile_tweets": "public",
+    "user_profile_replies": "public",
+    "user_profile_media": "public",
+    "user_profile_likes": "sensitive",
+    "messages": "dm",
+    "unknown": "public"
+  },
+  "retention_days_by_class": {
+    "public": 30,
+    "sensitive": 14,
+    "dm": 3
+  }
+}
