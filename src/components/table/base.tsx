@@ -40,6 +40,17 @@ const VIRTUAL_OVERSCAN_PX = 1600;
 const VIRTUAL_MAX_WINDOW_ROWS = 90;
 const VIRTUAL_SCROLL_UPDATE_PX = 24;
 const HIGHLIGHT_ATTRIBUTE = 'data-twe-highlight-v1';
+const CSS_HIGHLIGHT_PREFIX = 'scrollmark-table-search-';
+
+type CssHighlightRegistry = {
+  set: (name: string, highlight: unknown) => void;
+  delete: (name: string) => boolean;
+};
+
+type CssHighlightConstructor = new (...ranges: Range[]) => unknown;
+
+const cssHighlightNamesByRoot = new WeakMap<HTMLElement, string>();
+let cssHighlightId = 0;
 
 // For opening media preview modal in column definitions.
 declare module '@tanstack/table-core' {
@@ -133,12 +144,67 @@ function unwrapHighlightMark(mark: HTMLElement) {
 }
 
 function clearTextHighlights(root: HTMLElement) {
+  const cssHighlightName = cssHighlightNamesByRoot.get(root);
+  const cssHighlights = getCssHighlightRegistry();
+  if (cssHighlightName && cssHighlights) {
+    cssHighlights.delete(cssHighlightName);
+    removeCssHighlightStyle(cssHighlightName);
+  }
+
+  // Remove marks left by older builds. The active highlighter uses CSS Highlight
+  // ranges instead of DOM mutation so Preact-owned text nodes stay stable.
   const highlighted = root.querySelectorAll(`mark[${HIGHLIGHT_ATTRIBUTE}="1"]`);
   highlighted.forEach((node) => {
     if (node instanceof HTMLElement) {
       unwrapHighlightMark(node);
     }
   });
+}
+
+function getCssHighlightRegistry(): CssHighlightRegistry | null {
+  const css = (globalThis as { CSS?: { highlights?: CssHighlightRegistry } }).CSS;
+  const highlightCtor = getCssHighlightConstructor();
+  if (!css?.highlights || !highlightCtor) return null;
+  return css.highlights;
+}
+
+function getCssHighlightConstructor(): CssHighlightConstructor | null {
+  const highlightCtor = (globalThis as { Highlight?: CssHighlightConstructor }).Highlight;
+  return typeof highlightCtor === 'function' ? highlightCtor : null;
+}
+
+function getCssHighlightName(root: HTMLElement): string {
+  const existing = cssHighlightNamesByRoot.get(root);
+  if (existing) {
+    ensureCssHighlightStyle(existing);
+    return existing;
+  }
+  cssHighlightId += 1;
+  const name = `${CSS_HIGHLIGHT_PREFIX}${cssHighlightId}`;
+  cssHighlightNamesByRoot.set(root, name);
+  ensureCssHighlightStyle(name);
+  return name;
+}
+
+function ensureCssHighlightStyle(name: string) {
+  if (typeof document === 'undefined') return;
+  const id = `twe-css-highlight-style-${name}`;
+  if (document.getElementById(id)) return;
+
+  const style = document.createElement('style');
+  style.id = id;
+  style.textContent = `
+::highlight(${name}) {
+  background-color: rgba(250, 204, 21, 0.32);
+  color: inherit;
+}
+`;
+  document.head.appendChild(style);
+}
+
+function removeCssHighlightStyle(name: string) {
+  if (typeof document === 'undefined') return;
+  document.getElementById(`twe-css-highlight-style-${name}`)?.remove();
 }
 
 function escapeRegex(value: string): string {
@@ -154,6 +220,12 @@ function applyTextHighlights(root: HTMLElement, terms: string[]) {
     .sort((a, b) => b.length - a.length)
     .slice(0, 24);
   if (!normalizedTerms.length) return;
+
+  const cssHighlights = getCssHighlightRegistry();
+  const HighlightCtor = getCssHighlightConstructor();
+  if (!cssHighlights || !HighlightCtor) {
+    return;
+  }
 
   const pattern = new RegExp(
     `(${normalizedTerms.map((term) => escapeRegex(term)).join('|')})`,
@@ -183,33 +255,24 @@ function applyTextHighlights(root: HTMLElement, terms: string[]) {
     textNodes.push(walker.currentNode as Text);
   }
 
+  const ranges: Range[] = [];
   for (const node of textNodes) {
     const text = node.nodeValue || '';
     pattern.lastIndex = 0;
     if (!pattern.test(text)) continue;
 
-    const fragment = document.createDocumentFragment();
-    let cursor = 0;
-
+    pattern.lastIndex = 0;
     text.replace(pattern, (match: string, _capture: string, index: number) => {
-      if (index > cursor) {
-        fragment.appendChild(document.createTextNode(text.slice(cursor, index)));
-      }
-      const mark = document.createElement('mark');
-      mark.setAttribute(HIGHLIGHT_ATTRIBUTE, '1');
-      mark.className = 'bg-warning/30 text-inherit rounded-[2px] px-[1px]';
-      mark.textContent = match;
-      fragment.appendChild(mark);
-      cursor = index + match.length;
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + match.length);
+      ranges.push(range);
       return match;
     });
-
-    if (cursor < text.length) {
-      fragment.appendChild(document.createTextNode(text.slice(cursor)));
-    }
-
-    node.parentNode?.replaceChild(fragment, node);
   }
+
+  if (!ranges.length) return;
+  cssHighlights.set(getCssHighlightName(root), new HighlightCtor(...ranges));
 }
 
 function findVirtualIndexForOffset(offsets: number[], offset: number): number {
@@ -577,6 +640,9 @@ export function BaseTableView<T>({
     }
     highlightHadTermsRef.current = true;
     applyTextHighlights(root, searchResult.highlightTerms);
+    return () => {
+      clearTextHighlights(root);
+    };
   }, [visibleRows, searchResult.highlightTerms]);
 
   useEffect(() => {
