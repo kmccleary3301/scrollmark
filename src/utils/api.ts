@@ -13,10 +13,12 @@ import {
   TimelineTwitterList,
   TimelineUser,
   Tweet,
+  TweetArticleResult,
   TweetUnion,
   User,
 } from '@/types';
 import logger from './logger';
+import { parseTwitterDateTime } from './common';
 
 /**
  * A generic function to extract data from the API response.
@@ -323,6 +325,190 @@ export function extractQuotedTweet(tweet: Tweet): Tweet | null {
   return null;
 }
 
+export function extractTweetArticle(tweet: Tweet): TweetArticleResult | null {
+  const article = tweet.article?.article_results?.result;
+  return article && typeof article === 'object' ? article : null;
+}
+
+function extractArticleBlockText(article: TweetArticleResult | null): string[] {
+  const blocks = article?.content_state?.blocks;
+  if (!Array.isArray(blocks)) return [];
+
+  const parts: string[] = [];
+  for (const block of blocks) {
+    const text = typeof block?.text === 'string' ? block.text.trim() : '';
+    if (!text) continue;
+    parts.push(text);
+  }
+  return parts;
+}
+
+function normalizeSyntheticImageUrl(url: string): string {
+  const value = String(url || '').trim();
+  if (!value) return '';
+  return value.replace(/\?(?:format|name)=[^&]+(?:&name=[^&]+)?$/i, '');
+}
+
+function buildSyntheticPhotoMedia(params: {
+  tweet: Tweet;
+  url: string;
+  mediaId?: string | number | null;
+  mediaKey?: string | null;
+  width?: number | null;
+  height?: number | null;
+  altText?: string | null;
+  idPrefix?: string;
+}): Media | null {
+  const originalUrl = String(params.url || '').trim();
+  if (!originalUrl) return null;
+
+  const tweetUrl = getTweetURL(params.tweet);
+  const mediaId = String(
+    params.mediaId || `${params.idPrefix || 'synthetic'}_${params.tweet.rest_id}`,
+  ).trim();
+  const mediaKey = String(params.mediaKey || `${params.idPrefix || 'synthetic'}_${mediaId}`).trim();
+  const width = Number(params.width || 0) || 0;
+  const height = Number(params.height || 0) || 0;
+
+  return {
+    display_url: originalUrl,
+    expanded_url: tweetUrl,
+    id_str: mediaId || params.tweet.rest_id,
+    indices: [0, 0],
+    media_url_https: originalUrl,
+    type: 'photo',
+    url: originalUrl,
+    sizes: {
+      large: { h: height, w: width, resize: 'fit' },
+      medium: { h: height, w: width, resize: 'fit' },
+      small: { h: height, w: width, resize: 'fit' },
+      thumb: { h: height, w: width, resize: 'fit' },
+    },
+    original_info: {
+      height,
+      width,
+    },
+    media_results: {
+      result: {
+        media_key: mediaKey || `synthetic_${params.tweet.rest_id}`,
+      },
+    },
+    ext_alt_text: String(params.altText || '').trim() || undefined,
+    media_key: mediaKey || `synthetic_${params.tweet.rest_id}`,
+  };
+}
+
+function buildSyntheticArticleMedia(tweet: Tweet, article: TweetArticleResult | null): Media[] {
+  if (!article) return [];
+
+  const deduped = new Map<string, Media>();
+  const pushMedia = (media: Media | null) => {
+    if (!media) return;
+    const key = normalizeSyntheticImageUrl(media.media_url_https);
+    if (!key || deduped.has(key)) return;
+    deduped.set(key, media);
+  };
+
+  for (const entity of article.media_entities ?? []) {
+    pushMedia(
+      buildSyntheticPhotoMedia({
+        tweet,
+        url: entity?.media_info?.original_img_url || '',
+        mediaId: entity?.media_id || entity?.id || article?.rest_id || tweet.rest_id,
+        mediaKey: entity?.media_key || null,
+        width: entity?.media_info?.original_img_width || 0,
+        height: entity?.media_info?.original_img_height || 0,
+        altText: article?.title || article?.preview_text || null,
+        idPrefix: 'article',
+      }),
+    );
+  }
+
+  const coverMedia = article.cover_media;
+  pushMedia(
+    buildSyntheticPhotoMedia({
+      tweet,
+      url: coverMedia?.media_info?.original_img_url || '',
+      mediaId: coverMedia?.media_id || article?.rest_id || tweet.rest_id,
+      mediaKey: coverMedia?.media_key || null,
+      width: coverMedia?.media_info?.original_img_width || 0,
+      height: coverMedia?.media_info?.original_img_height || 0,
+      altText: article?.title || article?.preview_text || null,
+      idPrefix: 'article',
+    }),
+  );
+
+  return Array.from(deduped.values());
+}
+
+function extractCardImageMedia(tweet: Tweet): Media[] {
+  const cardCandidates = [tweet.card, tweet.unified_card];
+  const urls = new Map<string, string>();
+
+  const visit = (value: unknown): void => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== 'object') return;
+
+    const obj = value as Record<string, unknown>;
+    for (const [key, nested] of Object.entries(obj)) {
+      if (
+        key === 'url' &&
+        typeof nested === 'string' &&
+        /https:\/\/pbs\.twimg\.com\/(?:card_img|media)\//.test(nested)
+      ) {
+        const canonical = normalizeSyntheticImageUrl(nested);
+        if (canonical && !urls.has(canonical)) {
+          urls.set(canonical, nested);
+        }
+        continue;
+      }
+      visit(nested);
+    }
+  };
+
+  for (const candidate of cardCandidates) {
+    visit(candidate);
+  }
+
+  let index = 0;
+  return Array.from(urls.values())
+    .slice(0, 12)
+    .map((url) =>
+      buildSyntheticPhotoMedia({
+        tweet,
+        url,
+        mediaId: `${tweet.rest_id}_${index++}`,
+        mediaKey: `card_${tweet.rest_id}_${index}`,
+        altText: extractTweetFullText(tweet),
+        idPrefix: 'card',
+      }),
+    )
+    .filter((media): media is Media => !!media);
+}
+
+export function extractTweetCreatedAtMs(tweet: Tweet): number {
+  const legacyCreatedAt = tweet.legacy?.created_at;
+  if (typeof legacyCreatedAt === 'string' && legacyCreatedAt.trim()) {
+    const parsed = +parseTwitterDateTime(legacyCreatedAt);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  const articleCreatedAtSecs = Number(
+    extractTweetArticle(tweet)?.metadata?.first_published_at_secs || 0,
+  );
+  if (Number.isFinite(articleCreatedAtSecs) && articleCreatedAtSecs > 0) {
+    return articleCreatedAtSecs * 1000;
+  }
+
+  return Date.now();
+}
+
 export function extractTweetUserScreenName(tweet: Tweet): string {
   return tweet.core.user_results.result.core.screen_name;
 }
@@ -337,7 +523,33 @@ export function extractTweetMedia(tweet: Tweet): Media[] {
     return realTweet.legacy.extended_entities.media;
   }
 
-  return realTweet.legacy.entities.media ?? [];
+  const legacyMedia = realTweet.legacy?.entities?.media ?? [];
+  if (legacyMedia.length) {
+    return legacyMedia;
+  }
+
+  const articleMedia = buildSyntheticArticleMedia(realTweet, extractTweetArticle(realTweet));
+  if (articleMedia.length) {
+    return articleMedia;
+  }
+
+  const expectedMediaCount = Number(realTweet.twe_private_fields?.media_count || 0) || 0;
+  if (expectedMediaCount > 0) {
+    const cardMedia = extractCardImageMedia(realTweet);
+    if (cardMedia.length) {
+      return cardMedia;
+    }
+  }
+
+  return [];
+}
+
+export function hasOwnTweetMedia(tweet: Tweet): boolean {
+  if (extractRetweetedTweet(tweet)) {
+    return false;
+  }
+
+  return extractTweetMedia(tweet).length > 0;
 }
 
 export function extractTweetMediaTags(tweet: Tweet): Tag[] {
@@ -358,13 +570,75 @@ export function extractTweetMediaTags(tweet: Tweet): Tag[] {
 }
 
 export function extractTweetFullText(tweet: Tweet): string {
-  return tweet.note_tweet?.note_tweet_results.result.text ?? tweet.legacy.full_text;
+  const noteTweetText = tweet.note_tweet?.note_tweet_results.result.text;
+  if (noteTweetText && noteTweetText.trim()) {
+    return noteTweetText;
+  }
+
+  const legacyText = tweet.legacy?.full_text;
+  if (legacyText && legacyText.trim()) {
+    return legacyText;
+  }
+
+  const article = extractTweetArticle(tweet);
+  const parts = [article?.title, article?.preview_text, ...extractArticleBlockText(article)]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const deduped = parts.filter((value, index) => parts.indexOf(value) === index);
+  return deduped.join('\n\n');
 }
 
 export function filterEmptyTweet(tweet: Tweet): Tweet | null {
   if (!tweet.legacy) {
-    logger.warn('Empty tweet received', tweet);
-    return null;
+    const article = extractTweetArticle(tweet);
+    if (!article || !tweet.core?.user_results?.result) {
+      logger.warn('Empty tweet received', tweet);
+      return null;
+    }
+
+    const createdAtMs = extractTweetCreatedAtMs(tweet);
+    const fullText = extractTweetFullText(tweet);
+    const syntheticMedia = buildSyntheticArticleMedia(tweet, article);
+    const userRestId =
+      tweet.core.user_results.result.rest_id ||
+      String(tweet.core.user_results.result.id || '')
+        .split(':')
+        .pop() ||
+      '';
+
+    tweet.legacy = {
+      bookmark_count: 0,
+      bookmarked: false,
+      created_at: new Date(createdAtMs).toUTCString(),
+      conversation_id_str: tweet.rest_id,
+      display_text_range: [0, fullText.length],
+      entities: {
+        media: syntheticMedia.length ? syntheticMedia : undefined,
+        user_mentions: [],
+        urls: [],
+        hashtags: [],
+        symbols: [],
+        timestamps: [],
+      },
+      extended_entities: syntheticMedia.length
+        ? {
+            media: syntheticMedia,
+          }
+        : undefined,
+      favorite_count: 0,
+      favorited: false,
+      full_text: fullText,
+      is_quote_status: false,
+      lang: 'und',
+      possibly_sensitive: false,
+      possibly_sensitive_editable: false,
+      quote_count: 0,
+      reply_count: 0,
+      retweet_count: 0,
+      retweeted: false,
+      user_id_str: userRestId,
+      id_str: tweet.rest_id,
+    };
   }
 
   return tweet;
@@ -410,11 +684,42 @@ export function formatTwitterImage(
   imgUrl: string,
   name: 'thumb' | 'small' | 'medium' | 'large' | 'orig' = 'medium',
 ): string {
+  if (!imgUrl) return '';
+
+  try {
+    const parsed = new URL(imgUrl);
+    if (parsed.hostname === 'pbs.twimg.com') {
+      const format = parsed.searchParams.get('format');
+      const pathnameMatch = parsed.pathname.match(/^(\/media\/.+)\.(\w+)$/);
+      if (pathnameMatch) {
+        const [, pathWithoutExtension, ext] = pathnameMatch;
+        parsed.pathname = pathWithoutExtension || parsed.pathname;
+        parsed.search = '';
+        parsed.searchParams.set('format', ext || format || 'jpg');
+        parsed.searchParams.set('name', name);
+        return parsed.toString();
+      }
+
+      if (format) {
+        parsed.searchParams.set('name', name);
+        return parsed.toString();
+      }
+
+      if (parsed.searchParams.has('name')) {
+        parsed.searchParams.set('name', name);
+        return parsed.toString();
+      }
+    }
+  } catch {
+    // Fall through to legacy formatting.
+  }
+
   const regex = /^(https?:\/\/pbs\.twimg\.com\/media\/.+)\.(\w+)$/;
   const match = imgUrl.match(regex);
 
   if (!match) {
-    return `${imgUrl}?name=${name}`;
+    const separator = imgUrl.includes('?') ? '&' : '?';
+    return `${imgUrl}${separator}name=${name}`;
   }
 
   const [, url, ext] = match;
@@ -438,7 +743,8 @@ export function getFileExtensionFromUrl(url: string): string {
 }
 
 export function getTweetURL(tweet: Tweet): string {
-  return `https://twitter.com/${extractTweetUserScreenName(tweet)}/status/${tweet.legacy.id_str}`;
+  const tweetId = String(tweet.legacy?.id_str || tweet.rest_id || '').trim();
+  return `https://twitter.com/${extractTweetUserScreenName(tweet)}/status/${tweetId}`;
 }
 
 export function getUserURL(user: User | string): string {

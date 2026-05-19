@@ -1,6 +1,5 @@
 import { signal } from '@preact/signals';
-import { Interceptor } from '@/core/extensions';
-import logger from '@/utils/logger';
+import { createModuleInterceptor } from '@/core/extensions/module-platform';
 import {
   Conversation,
   ConversationResponse,
@@ -63,25 +62,32 @@ const strategies: Strategy[] = [
 // https://twitter.com/i/api/1.1/dm/inbox_timeline/trusted.json
 // https://twitter.com/i/api/1.1/dm/conversation/{uid}-{uid}.json  # ONE_TO_ONE
 // https://twitter.com/i/api/1.1/dm/conversation/{cid}.json        # GROUP_DM
-export const DirectMessagesInterceptor: Interceptor = (req, res) => {
-  const strategy = strategies.find((s) => s.test(req.url));
+export const DirectMessagesInterceptor = createModuleInterceptor<{
+  messages: Message[];
+  conversations: Conversation[];
+  users: LegacyUser[];
+}>({
+  moduleName: 'DirectMessages',
+  match: (req) => strategies.some((s) => s.test(req.url)),
+  parse: (req, res) => {
+    const strategy = strategies.find((s) => s.test(req.url));
+    if (!strategy) {
+      return { messages: [], conversations: [], users: [] };
+    }
 
-  if (!strategy) {
-    return;
-  }
-
-  try {
     const json = JSON.parse(res.responseText);
     const { entries, conversations, users } = strategy.parse(json);
-    const messages = entries.map((entry) => entry.message).filter((message) => !!message);
-
-    messagesSignal.value = [...messagesSignal.value, ...messages];
-    conversations.filter(Boolean).forEach((c) => conversationsCollection.set(c.conversation_id, c));
-    users.filter(Boolean).forEach((user) => usersCollection.set(user.id_str, user));
-
-    logger.info(`DirectMessages: ${messages.length} items received`);
-  } catch (err) {
-    logger.debug(req.method, req.url, res.status, res.responseText);
-    logger.errorWithBanner('DirectMessages: Failed to parse API response', err as Error);
-  }
-};
+    const messages = entries
+      .map((entry) => entry.message)
+      .filter((message): message is Message => !!message);
+    return { messages, conversations, users };
+  },
+  count: (parsed) => parsed.messages.length,
+  onSuccess: (parsed) => {
+    messagesSignal.value = [...messagesSignal.value, ...parsed.messages];
+    parsed.conversations
+      .filter(Boolean)
+      .forEach((c) => conversationsCollection.set(c.conversation_id, c));
+    parsed.users.filter(Boolean).forEach((user) => usersCollection.set(user.id_str, user));
+  },
+});

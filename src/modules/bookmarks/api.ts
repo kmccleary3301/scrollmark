@@ -1,5 +1,10 @@
 import { Interceptor } from '@/core/extensions';
 import { db } from '@/core/database';
+import {
+  logModuleItemsReceived,
+  logModuleParseFailure,
+  projectTweets,
+} from '@/core/extensions/module-platform';
 import { TimelineInstructions, Tweet } from '@/types';
 import { extractDataFromResponse, extractTimelineTweet } from '@/utils/api';
 import logger from '@/utils/logger';
@@ -790,6 +795,28 @@ function parseBookmarkFoldersSlice(text: string): Set<string> {
   return changedFolderIds;
 }
 
+function isBookmarksTimelineRequest(url: string): boolean {
+  try {
+    const path = new URL(url, 'https://x.com').pathname.toLowerCase();
+    const graphqlMatch = path.match(/\/graphql\/[^/]+\/([^/?#]+)/);
+    const endpoint = String(graphqlMatch?.[1] || '').toLowerCase();
+    if (!endpoint) return false;
+    return (
+      endpoint === 'bookmarks' ||
+      endpoint === 'bookmarktimeline' ||
+      endpoint === 'bookmarkfoldertimeline' ||
+      endpoint === 'bookmarkcollectiontimeline' ||
+      endpoint === 'bookmarkcollectionstimeline' ||
+      endpoint === 'bookmarkfoldersslice' ||
+      endpoint === 'bookmarkfolderslice' ||
+      endpoint === 'bookmarkcollectionslice' ||
+      endpoint === 'bookmarkslice'
+    );
+  } catch {
+    return false;
+  }
+}
+
 // https://twitter.com/i/api/graphql/.../BookmarkFoldersSlice - populates folder id->name cache
 // https://twitter.com/i/api/graphql/.../Bookmarks and /BookmarkFolderTimeline
 // capture tweets and stamps folder metadata
@@ -804,11 +831,7 @@ export const BookmarksInterceptor: Interceptor = (req, res, ext) => {
     }
     return;
   }
-  if (
-    !/\/graphql\/.+\/(Bookmarks|BookmarkFolderTimeline|BookmarkCollectionTimeline|BookmarkCollectionsTimeline)/.test(
-      req.url,
-    )
-  ) {
+  if (!isBookmarksTimelineRequest(req.url)) {
     return;
   }
 
@@ -892,15 +915,14 @@ export const BookmarksInterceptor: Interceptor = (req, res, ext) => {
     }
 
     // Add captured data to the database.
-    db.extAddTweets(ext.name, newData);
+    projectTweets(ext.name, newData);
     triggerFolderNameBackfillIfNeeded(ext.name, folderCtx.folder_id, newData);
 
-    logger.info(
-      `Bookmarks: ${newData.length} items received` +
-        (folderCtx.folder_id ? ` (folder: ${folderCtx.folder_name ?? folderCtx.folder_id})` : ''),
+    logModuleItemsReceived(
+      `Bookmarks${folderCtx.folder_id ? ` (folder: ${folderCtx.folder_name ?? folderCtx.folder_id})` : ''}`,
+      newData.length,
     );
   } catch (err) {
-    logger.debug(req.method, req.url, res.status, res.responseText);
-    logger.errorWithBanner('Bookmarks: Failed to parse API response', err as Error);
+    logModuleParseFailure('Bookmarks', req, res, err as Error);
   }
 };

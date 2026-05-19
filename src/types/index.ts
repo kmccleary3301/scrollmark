@@ -3,6 +3,8 @@ import { TimelineTweet } from './tweet';
 import { TimelineUser } from './user';
 
 export * from './list';
+export * from './raw-event';
+export * from './social-edge';
 export * from './tweet';
 export * from './user';
 

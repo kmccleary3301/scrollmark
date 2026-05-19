@@ -1,4 +1,4 @@
-import { EntityURL } from './index';
+import { EntityURL, UserRelationshipFields } from './index';
 
 export interface TimelineUser {
   itemType: 'TimelineUser';
@@ -125,6 +125,7 @@ export interface User {
     /** The UNIX timestamp in ms when the data record was migrated from legacy format. */
     migrated_at?: number;
   };
+  twe_relationship_fields?: UserRelationshipFields;
 }
 
 /**

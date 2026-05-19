@@ -1,7 +1,5 @@
-import { Interceptor } from '@/core/extensions';
-import { db } from '@/core/database';
+import { createModuleInterceptor, projectUsers } from '@/core/extensions/module-platform';
 import { User } from '@/types';
-import logger from '@/utils/logger';
 
 interface UserDetailResponse {
   data: {
@@ -12,21 +10,12 @@ interface UserDetailResponse {
 }
 
 // https://twitter.com/i/api/graphql/BQ6xjFU6Mgm-WhEP3OiT9w/UserByScreenName
-export const UserDetailInterceptor: Interceptor = (req, res, ext) => {
-  if (!/\/graphql\/.+\/UserByScreenName/.test(req.url)) {
-    return;
-  }
-
-  try {
+export const UserDetailInterceptor = createModuleInterceptor<User[]>({
+  moduleName: 'UserDetail',
+  match: (req) => /\/graphql\/.+\/UserByScreenName/.test(req.url),
+  parse: (_req, res) => {
     const json: UserDetailResponse = JSON.parse(res.responseText);
-    const newData = [json.data.user.result];
-
-    // Add captured data to the database.
-    db.extAddUsers(ext.name, newData);
-
-    logger.info(`UserDetail: ${newData.length} items received`);
-  } catch (err) {
-    logger.debug(req.method, req.url, res.status, res.responseText);
-    logger.errorWithBanner('UserDetail: Failed to parse API response', err as Error);
-  }
-};
+    return [json.data.user.result];
+  },
+  project: (extName, users) => projectUsers(extName, users),
+});

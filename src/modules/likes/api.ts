@@ -1,8 +1,6 @@
-import { Interceptor } from '@/core/extensions';
-import { db } from '@/core/database';
+import { createModuleInterceptor, projectTweets } from '@/core/extensions/module-platform';
 import { TimelineInstructions, Tweet } from '@/types';
 import { extractDataFromResponse, extractTimelineTweet } from '@/utils/api';
-import logger from '@/utils/logger';
 
 interface LikesResponse {
   data: {
@@ -21,24 +19,14 @@ interface LikesResponse {
 }
 
 // https://twitter.com/i/api/graphql/lVf2NuhLoYVrpN4nO7uw0Q/Likes
-export const LikesInterceptor: Interceptor = (req, res, ext) => {
-  if (!/\/graphql\/.+\/Likes/.test(req.url)) {
-    return;
-  }
-
-  try {
-    const newData = extractDataFromResponse<LikesResponse, Tweet>(
+export const LikesInterceptor = createModuleInterceptor<Tweet[]>({
+  moduleName: 'Likes',
+  match: (req) => /\/graphql\/.+\/Likes/.test(req.url),
+  parse: (_req, res) =>
+    extractDataFromResponse<LikesResponse, Tweet>(
       res,
       (json) => json.data.user.result.timeline.timeline.instructions,
       (entry) => extractTimelineTweet(entry.content.itemContent),
-    );
-
-    // Add captured data to the database.
-    db.extAddTweets(ext.name, newData);
-
-    logger.info(`Likes: ${newData.length} items received`);
-  } catch (err) {
-    logger.debug(req.method, req.url, res.status, res.responseText);
-    logger.errorWithBanner('Likes: Failed to parse API response', err as Error);
-  }
-};
+    ),
+  project: (extName, tweets) => projectTweets(extName, tweets),
+});

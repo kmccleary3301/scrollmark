@@ -1,5 +1,4 @@
-import { Interceptor } from '@/core/extensions';
-import { db } from '@/core/database';
+import { createModuleInterceptor, projectTweets } from '@/core/extensions/module-platform';
 import {
   TimelineAddEntriesInstruction,
   TimelineInstructions,
@@ -12,7 +11,6 @@ import {
   isTimelineEntryProfileConversation,
   isTimelineEntryTweet,
 } from '@/utils/api';
-import logger from '@/utils/logger';
 
 interface UserTweetsResponse {
   data: {
@@ -32,18 +30,14 @@ interface UserTweetsResponse {
 
 // https://twitter.com/i/api/graphql/H8OOoI-5ZE4NxgRr8lfyWg/UserTweets
 // https://twitter.com/i/api/graphql/Q6aAvPw7azXZbqXzuqTALA/UserTweetsAndReplies
-export const UserTweetsInterceptor: Interceptor = (req, res, ext) => {
-  if (!/\/graphql\/.+\/UserTweets/.test(req.url)) {
-    return;
-  }
-
-  try {
+export const UserTweetsInterceptor = createModuleInterceptor<Tweet[]>({
+  moduleName: 'UserTweets',
+  match: (req) => /\/graphql\/.+\/UserTweets/.test(req.url),
+  parse: (_req, res) => {
     const json: UserTweetsResponse = JSON.parse(res.responseText);
     const instructions = json.data.user.result.timeline.timeline.instructions;
 
     const newData: Tweet[] = [];
-
-    // The pinned tweet.
     const timelinePinEntryInstruction = instructions.find(
       (i) => i.type === 'TimelinePinEntry',
     ) as TimelinePinEntryInstruction;
@@ -55,16 +49,12 @@ export const UserTweetsInterceptor: Interceptor = (req, res, ext) => {
       }
     }
 
-    // Normal tweets.
     const timelineAddEntriesInstruction = instructions.find(
       (i) => i.type === 'TimelineAddEntries',
     ) as TimelineAddEntriesInstruction<TimelineTweet>;
-
-    // The "TimelineAddEntries" instruction may not exist in some cases.
     const timelineAddEntriesInstructionEntries = timelineAddEntriesInstruction?.entries ?? [];
 
     for (const entry of timelineAddEntriesInstructionEntries) {
-      // Extract normal tweets.
       if (isTimelineEntryTweet(entry)) {
         const tweet = extractTimelineTweet(entry.content.itemContent);
         if (tweet) {
@@ -72,7 +62,6 @@ export const UserTweetsInterceptor: Interceptor = (req, res, ext) => {
         }
       }
 
-      // Extract conversations.
       if (isTimelineEntryProfileConversation(entry)) {
         const tweetsInConversation = entry.content.items
           .map((i) => extractTimelineTweet(i.item.itemContent))
@@ -82,12 +71,7 @@ export const UserTweetsInterceptor: Interceptor = (req, res, ext) => {
       }
     }
 
-    // Add captured tweets to the database.
-    db.extAddTweets(ext.name, newData);
-
-    logger.info(`UserTweets: ${newData.length} items received`);
-  } catch (err) {
-    logger.debug(req.method, req.url, res.status, res.responseText);
-    logger.errorWithBanner('UserTweets: Failed to parse API response', err as Error);
-  }
-};
+    return newData;
+  },
+  project: (extName, tweets) => projectTweets(extName, tweets),
+});

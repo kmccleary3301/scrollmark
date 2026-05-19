@@ -23,6 +23,7 @@ export function DirectMessagesUI() {
       active={!!count && count > 0}
       onClick={toggleShowModal}
       indicatorColor="bg-accent"
+      panelClass="border-l-2 border-accent/50 pl-2"
     >
       <Modal
         class="max-w-4xl md:max-w-screen-md sm:max-w-screen-sm min-h-[512px]"

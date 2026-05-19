@@ -60,6 +60,7 @@ export interface TweetUnavailable {
 export interface Tweet {
   __typename: 'Tweet';
   rest_id: string;
+  article?: TweetArticle;
   core: {
     user_results: {
       result: User;
@@ -165,6 +166,54 @@ export interface NoteTweet {
   };
   media: {
     inline_media: unknown[];
+  };
+}
+
+export interface TweetArticle {
+  article_results?: {
+    result?: TweetArticleResult;
+  };
+}
+
+export interface TweetArticleResult {
+  id?: string;
+  rest_id?: string;
+  title?: string;
+  preview_text?: string;
+  metadata?: {
+    first_published_at_secs?: number;
+  };
+  cover_media?: {
+    id?: string;
+    media_id?: string;
+    media_key?: string;
+    media_info?: {
+      __typename?: 'ApiImage';
+      original_img_url?: string;
+      original_img_width?: number;
+      original_img_height?: number;
+    };
+  };
+  media_entities?: Array<{
+    id?: string;
+    media_id?: string;
+    media_key?: string;
+    media_info?: {
+      __typename?: 'ApiImage';
+      original_img_url?: string;
+      original_img_width?: number;
+      original_img_height?: number;
+    };
+  }>;
+  content_state?: {
+    blocks?: Array<{
+      key?: string;
+      text?: string;
+      type?: string;
+      data?: unknown;
+      entityRanges?: unknown[];
+      inlineStyleRanges?: unknown[];
+    }>;
   };
 }
 
