@@ -1,4 +1,5 @@
 import { Signal, signal } from '@preact/signals';
+import { recordDiagnosticDbEvent } from '@/utils/diagnostics';
 
 const DB_MUTATION_STORAGE_KEY = '__twe_db_mutation_v1';
 const DB_MUTATION_CHANNEL_NAME = 'twe-db-mutation-v1';
@@ -13,6 +14,8 @@ type MutationMessage = {
 export type DatabaseMutationEvent = {
   extension?: string;
   operation?: string;
+  count?: number;
+  keys?: string[];
 };
 
 const globalMutationVersion = signal(0);
@@ -118,6 +121,14 @@ export function emitDatabaseMutation(event: DatabaseMutationEvent = {}): void {
   } catch {
     // ignore storage write failures
   }
+
+  recordDiagnosticDbEvent({
+    ts: payload.at || Date.now(),
+    extension: event.extension,
+    operation: event.operation,
+    count: typeof event.count === 'number' ? event.count : undefined,
+    keys: Array.isArray(event.keys) ? event.keys.slice(0, 20) : undefined,
+  });
 }
 
 /**
