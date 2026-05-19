@@ -65,6 +65,31 @@ export function xssFilter(str: string) {
   return str.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+export function escapeHTML(str: string) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function normalizeSafeLinkURL(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Replace t.co URLs in a string with real HTML links.
  *
@@ -85,22 +110,47 @@ export function xssFilter(str: string) {
  * ```
  */
 export function strEntitiesToHTML(str: string, urls?: EntityURL[]) {
-  let temp = str;
-
   if (!urls?.length) {
-    return temp;
+    return escapeHTML(str);
   }
 
-  for (const { url, display_url, expanded_url } of urls) {
-    temp = temp.replaceAll(
-      url,
-      `<a class="link" target="_blank" href="${xssFilter(expanded_url ?? url)}">${xssFilter(
-        display_url ?? url,
-      )}</a>`,
-    );
+  let cursor = 0;
+  let html = '';
+
+  const entities = [...urls]
+    .filter((entity) => Array.isArray(entity.indices) && entity.indices.length >= 2)
+    .map((entity) => ({
+      ...entity,
+      start: Math.max(0, Number(entity.indices[0]) || 0),
+      end: Math.max(0, Number(entity.indices[1]) || 0),
+    }))
+    .filter((entity) => entity.end > entity.start && entity.start < str.length)
+    .sort((a, b) => a.start - b.start);
+
+  for (const entity of entities) {
+    const start = Math.max(cursor, entity.start);
+    const end = Math.min(str.length, entity.end);
+    if (start > cursor) {
+      html += escapeHTML(str.slice(cursor, start));
+    }
+
+    const originalText = str.slice(start, end);
+    const href = normalizeSafeLinkURL(entity.expanded_url ?? entity.url);
+    if (href) {
+      html += `<a class="link" target="_blank" rel="noopener noreferrer" href="${escapeHTML(
+        href,
+      )}">${escapeHTML(entity.display_url ?? originalText)}</a>`;
+    } else {
+      html += escapeHTML(originalText);
+    }
+    cursor = end;
   }
 
-  return temp;
+  if (cursor < str.length) {
+    html += escapeHTML(str.slice(cursor));
+  }
+
+  return html;
 }
 
 export function parseTwitterDateTime(str: string | undefined) {
