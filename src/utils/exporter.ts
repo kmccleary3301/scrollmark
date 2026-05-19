@@ -133,7 +133,7 @@ export async function htmlExporter(data: DataType[], translations: Record<string
         }
       } else if (exportKey === 'full_text' || exportKey === 'description') {
         const p = document.createElement('p');
-        p.innerHTML = value;
+        p.textContent = typeof value === 'string' ? value : JSON.stringify(value);
         p.style.whiteSpace = 'pre-wrap';
         p.style.maxWidth = '640px';
         td.appendChild(p);

@@ -1,6 +1,6 @@
 import { saveAs } from 'file-saver-es';
-import { Table } from '@tanstack/table-core';
 import { useSignal } from '@preact/signals';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   IconCircleCheck,
   IconCircleDashed,
@@ -9,7 +9,12 @@ import {
   IconInfoCircle,
 } from '@tabler/icons-preact';
 
-import { FileLike, ProgressCallback, zipStreamDownload } from '@/utils/download';
+import {
+  FileLike,
+  ProgressCallback,
+  ZipStreamDownloadOptions,
+  zipStreamDownload,
+} from '@/utils/download';
 import { DEFAULT_MEDIA_TYPES, extractMedia, patterns } from '@/utils/media';
 import { Modal, MultiSelect } from '@/components/common';
 import { options } from '@/core/options';
@@ -17,23 +22,51 @@ import { TranslationKey, useTranslation } from '@/i18n';
 import { Media, Tweet, User } from '@/types';
 import { useSignalState, cx, useToggle } from '@/utils/common';
 import logger from '@/utils/logger';
+import { ResultSetSnapshot } from '@/utils/result-set';
 
 type ExportMediaModalProps<T> = {
   title: string;
-  table: Table<T>;
+  resultRecords: T[];
+  selectedRecords: T[];
+  resultSetSnapshot: ResultSetSnapshot;
+  selectionMode: 'all' | 'explicit';
   isTweet?: boolean;
   show?: boolean;
   onClose?: () => void;
 };
 
 type MediaFilterType = Media['type'] | 'retweet';
+type ExportScopeType = 'selected' | 'result_set';
+
+function cloneSnapshotValue<T>(value: T): T {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+
+  if (typeof structuredClone === 'function') {
+    try {
+      return structuredClone(value);
+    } catch {
+      // Fall through to JSON cloning.
+    }
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value)) as T;
+  } catch {
+    return value;
+  }
+}
 
 /**
  * Modal for exporting media.
  */
 export function ExportMediaModal<T>({
   title,
-  table,
+  resultRecords,
+  selectedRecords,
+  resultSetSnapshot,
+  selectionMode,
   isTweet,
   show,
   onClose,
@@ -44,11 +77,24 @@ export function ExportMediaModal<T>({
   const [copied, setCopied] = useSignalState(false);
 
   const [useAria2Format, toggleUseAria2Format] = useToggle(false);
-  const [rateLimit, setRateLimit] = useSignalState(1000);
+  const [rateLimitInput, setRateLimitInput] = useState('75');
+  const [globalConcurrencyInput, setGlobalConcurrencyInput] = useState('10');
+  const [perHostConcurrencyInput, setPerHostConcurrencyInput] = useState('8');
+  const [videoConcurrencyInput, setVideoConcurrencyInput] = useState('3');
+  const [maxRetriesInput, setMaxRetriesInput] = useState('3');
   const [filenamePattern, setFilenamePattern] = useSignalState(options.get('filenamePattern'));
   const [currentProgress, setCurrentProgress] = useSignalState(0);
   const [totalProgress, setTotalProgress] = useSignalState(0);
+  const [zipProgress, setZipProgress] = useSignalState(0);
+  const [exportScope, setExportScope] = useSignalState<ExportScopeType>('result_set');
+  const [pinnedResultRecords, setPinnedResultRecords] = useState<T[]>([]);
+  const [pinnedSelectedRecords, setPinnedSelectedRecords] = useState<T[]>([]);
+  const [pinnedResultSetSnapshot, setPinnedResultSetSnapshot] = useState<ResultSetSnapshot | null>(
+    null,
+  );
   const taskStatusSignal = useSignal<Record<string, number>>({});
+  const wasOpenRef = useRef(false);
+  const lastProgressPublishRef = useRef(0);
 
   // Media type filters.
   const [filters, setFilters] = useSignalState<MediaFilterType[]>([
@@ -57,17 +103,72 @@ export function ExportMediaModal<T>({
   ]);
 
   const includeRetweets = filters.includes('retweet');
-  const mediaList = extractMedia(
-    table.getSelectedRowModel().rows.map((row) => row.original) as Tweet[] | User[],
-    includeRetweets,
-    filenamePattern ?? '',
-  ).filter((media) => filters.includes(media.type as MediaFilterType));
+  const activeRecords = useMemo(
+    () => (exportScope === 'selected' ? pinnedSelectedRecords : pinnedResultRecords),
+    [exportScope, pinnedResultRecords, pinnedSelectedRecords],
+  );
+  const mediaList = useMemo(
+    () =>
+      extractMedia(
+        activeRecords as Tweet[] | User[],
+        includeRetweets,
+        filenamePattern ?? '',
+      ).filter((media) => filters.includes(media.type as MediaFilterType)),
+    [activeRecords, filters, filenamePattern, includeRetweets],
+  );
+  const previewMediaList = useMemo(() => mediaList.slice(0, 250), [mediaList]);
+  const previewFilenameSet = useMemo(
+    () => new Set(previewMediaList.map((media) => media.filename)),
+    [previewMediaList],
+  );
+
+  useEffect(() => {
+    if (!show) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) {
+      return;
+    }
+
+    wasOpenRef.current = true;
+
+    setPinnedResultRecords(resultRecords.map((row) => cloneSnapshotValue(row)));
+    setPinnedSelectedRecords(selectedRecords.map((row) => cloneSnapshotValue(row)));
+    setPinnedResultSetSnapshot({
+      ...resultSetSnapshot,
+      ids: [...resultSetSnapshot.ids],
+      warnings: [...resultSetSnapshot.warnings],
+    });
+    setExportScope(
+      selectedRecords.length > 0 && selectionMode === 'explicit' ? 'selected' : 'result_set',
+    );
+    setCurrentProgress(0);
+    setTotalProgress(0);
+    setZipProgress(0);
+    taskStatusSignal.value = {};
+  }, [
+    resultRecords,
+    resultSetSnapshot,
+    selectedRecords,
+    selectionMode,
+    setCurrentProgress,
+    setExportScope,
+    setTotalProgress,
+    setZipProgress,
+    show,
+    taskStatusSignal,
+  ]);
 
   const onProgress: ProgressCallback<FileLike> = (current, total, value) => {
-    setCurrentProgress(current);
-    setTotalProgress(total);
+    const now = Date.now();
+    if (current === total || now - lastProgressPublishRef.current > 120) {
+      lastProgressPublishRef.current = now;
+      setCurrentProgress(current);
+      setTotalProgress(total);
+    }
 
-    if (value?.filename) {
+    if (value?.filename && previewFilenameSet.has(value.filename)) {
       const updated = { ...taskStatusSignal.value, [value.filename]: 100 };
       taskStatusSignal.value = updated;
     }
@@ -75,8 +176,25 @@ export function ExportMediaModal<T>({
 
   const onExport = async () => {
     try {
+      const schedulerOptions: ZipStreamDownloadOptions = {
+        minDelayBetweenStartsMs: Math.max(0, parseInt(rateLimitInput, 10) || 0),
+        globalConcurrency: Math.max(1, parseInt(globalConcurrencyInput, 10) || 1),
+        perHostConcurrency: Math.max(1, parseInt(perHostConcurrencyInput, 10) || 1),
+        videoConcurrency: Math.max(1, parseInt(videoConcurrencyInput, 10) || 1),
+        maxRetries: Math.max(0, parseInt(maxRetriesInput, 10) || 0),
+        onZipProgress: (current) => setZipProgress(current),
+      };
       setLoading(true);
-      await zipStreamDownload(`twitter-${title}-${Date.now()}-media.zip`, mediaList, onProgress);
+      lastProgressPublishRef.current = 0;
+      setCurrentProgress(0);
+      setTotalProgress(mediaList.length);
+      setZipProgress(0);
+      await zipStreamDownload(
+        `twitter-${title}-${exportScope === 'selected' ? 'selected' : 'results'}-${Date.now()}-media.zip`,
+        mediaList,
+        onProgress,
+        schedulerOptions,
+      );
       setLoading(false);
     } catch (err) {
       setLoading(false);
@@ -121,11 +239,55 @@ export function ExportMediaModal<T>({
           <IconInfoCircle size={24} />
           <span>
             {t(
-              'For more than 100 media or large files, it is recommended to copy the URLs and download them with an external download manager such as aria2.',
+              'Browser ZIP export now uses bounded parallel downloads. For very large video-heavy jobs, URL or aria2 export is still the safest low-memory path.',
             )}
           </span>
         </div>
         {/* Export options. */}
+        <div class="flex items-center gap-4 mb-1">
+          <p class="leading-8">{t('Export scope:')}</p>
+          <label class="label cursor-pointer gap-2 py-0">
+            <input
+              type="radio"
+              name="media-export-scope"
+              class="radio radio-sm"
+              checked={exportScope === 'result_set'}
+              onChange={() => setExportScope('result_set')}
+            />
+            <span>{t('All current results')}</span>
+            <span class="font-mono opacity-60">({pinnedResultRecords.length})</span>
+          </label>
+          <label
+            class={cx(
+              'label cursor-pointer gap-2 py-0',
+              !pinnedSelectedRecords.length && 'opacity-50',
+            )}
+          >
+            <input
+              type="radio"
+              name="media-export-scope"
+              class="radio radio-sm"
+              checked={exportScope === 'selected'}
+              disabled={!pinnedSelectedRecords.length}
+              onChange={() => setExportScope('selected')}
+            />
+            <span>{t('Selected rows')}</span>
+            <span class="font-mono opacity-60">({pinnedSelectedRecords.length})</span>
+          </label>
+        </div>
+        {pinnedResultSetSnapshot ? (
+          <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2 text-xs leading-5 mb-2">
+            <div class="font-semibold">{t('Pinned result set')}</div>
+            <div class="font-mono opacity-70">{pinnedResultSetSnapshot.resultSetId}</div>
+            <div>
+              {t('Query')}:{' '}
+              <span class="font-mono">{pinnedResultSetSnapshot.queryText || '-'}</span>
+            </div>
+            <div>
+              {t('Sort')}: <span class="font-mono">{pinnedResultSetSnapshot.sort}</span>
+            </div>
+          </div>
+        ) : null}
         {isTweet && (
           <div class="flex flex-wrap sm:grid grid-cols-4 sm:gap-2 items-center sm:h-9">
             <p class="leading-8">{t('Filename template:')}</p>
@@ -148,17 +310,77 @@ export function ExportMediaModal<T>({
             </div>
           </div>
         )}
+        <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2 mt-2 mb-2">
+          <div class="mb-1 flex items-center justify-between gap-2">
+            <p class="font-semibold text-sm">{t('Download scheduler')}</p>
+            <span class="font-mono text-[10px] opacity-60">
+              {t('Faster defaults are intended for bulk CDN transfer.')}
+            </span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <label class="form-control">
+              <span class="label-text text-xs">{t('Start delay (ms)')}</span>
+              <input
+                type="number"
+                min="0"
+                class="input input-bordered input-sm"
+                value={rateLimitInput}
+                onInput={(e) => setRateLimitInput((e.currentTarget as HTMLInputElement).value)}
+              />
+            </label>
+            <label class="form-control">
+              <span class="label-text text-xs">{t('Global parallel')}</span>
+              <input
+                type="number"
+                min="1"
+                max="32"
+                class="input input-bordered input-sm"
+                value={globalConcurrencyInput}
+                onInput={(e) =>
+                  setGlobalConcurrencyInput((e.currentTarget as HTMLInputElement).value)
+                }
+              />
+            </label>
+            <label class="form-control">
+              <span class="label-text text-xs">{t('Per host')}</span>
+              <input
+                type="number"
+                min="1"
+                max="32"
+                class="input input-bordered input-sm"
+                value={perHostConcurrencyInput}
+                onInput={(e) =>
+                  setPerHostConcurrencyInput((e.currentTarget as HTMLInputElement).value)
+                }
+              />
+            </label>
+            <label class="form-control">
+              <span class="label-text text-xs">{t('Videos')}</span>
+              <input
+                type="number"
+                min="1"
+                max="16"
+                class="input input-bordered input-sm"
+                value={videoConcurrencyInput}
+                onInput={(e) =>
+                  setVideoConcurrencyInput((e.currentTarget as HTMLInputElement).value)
+                }
+              />
+            </label>
+            <label class="form-control">
+              <span class="label-text text-xs">{t('Retries')}</span>
+              <input
+                type="number"
+                min="0"
+                max="8"
+                class="input input-bordered input-sm"
+                value={maxRetriesInput}
+                onInput={(e) => setMaxRetriesInput((e.currentTarget as HTMLInputElement).value)}
+              />
+            </label>
+          </div>
+        </div>
         <div class="flex flex-wrap sm:grid grid-cols-4 sm:gap-2 items-center sm:h-9">
-          <p class="leading-8 col-span-1 whitespace-nowrap">{t('Rate limit (ms):')}</p>
-          <input
-            type="number"
-            class="input input-bordered input-sm col-span-1"
-            value={rateLimit}
-            onChange={(e) => {
-              const value = parseInt((e?.target as HTMLInputElement)?.value);
-              setRateLimit(value || 0);
-            }}
-          />
           <p class="leading-8 col-span-1 whitespace-nowrap sm:pl-2">{t('Use aria2 format:')}</p>
           <div class="col-span-1 flex items-center">
             <input
@@ -207,7 +429,7 @@ export function ExportMediaModal<T>({
               </tr>
             </thead>
             <tbody>
-              {mediaList.map((media, index) => (
+              {previewMediaList.map((media, index) => (
                 <tr>
                   <td>
                     {taskStatusSignal.value[media.filename] ? (
@@ -233,6 +455,11 @@ export function ExportMediaModal<T>({
               ))}
             </tbody>
           </table>
+          {mediaList.length > 250 ? (
+            <div class="px-2 py-1 text-xs opacity-60">
+              {t('Preview limited to first 250 media items.')}
+            </div>
+          ) : null}
           {mediaList.length > 0 ? null : (
             <div class="flex items-center justify-center h-28 w-full">
               <p class="text-base-content text-opacity-50">{t('No media selected.')}</p>
@@ -247,7 +474,9 @@ export function ExportMediaModal<T>({
             max="100"
           />
           <span class="text-sm h-4 leading-none mt-2 text-base-content text-opacity-60">
-            {`${currentProgress}/${mediaList.length}`}
+            {zipProgress
+              ? `${t('Zipping')}: ${zipProgress}/${mediaList.length}`
+              : `${currentProgress}/${mediaList.length}`}
           </span>
         </div>
       </div>
@@ -265,7 +494,11 @@ export function ExportMediaModal<T>({
             <IconFileDownload />
           </button>
         </div>
-        <button class={cx('btn btn-secondary', loading && 'btn-disabled')} onClick={onExport}>
+        <button
+          class={cx('btn btn-secondary', (loading || mediaList.length === 0) && 'btn-disabled')}
+          onClick={onExport}
+          disabled={loading || mediaList.length === 0}
+        >
           {loading && <span class="loading loading-spinner" />}
           {t('Start Export')}
         </button>

@@ -1,12 +1,13 @@
 import { Media, Tweet, User } from '@/types';
 import {
+  extractTweetCreatedAtMs,
   extractTweetMedia,
   getFileExtensionFromUrl,
   getMediaIndex,
   getMediaOriginalUrl,
   getProfileImageOriginalUrl,
 } from './api';
-import { parseTwitterDateTime } from './common';
+import { formatDateTime } from './common';
 import { FileLike } from './download';
 
 export type PatternExtractor = (tweet: Tweet, media: Media) => string;
@@ -37,11 +38,11 @@ export const patterns: Record<string, { description: string; extractor: PatternE
   },
   date: {
     description: 'The post date in YYYYMMDD format',
-    extractor: (tweet) => parseTwitterDateTime(tweet.legacy.created_at).format('YYYYMMDD'),
+    extractor: (tweet) => formatDateTime(extractTweetCreatedAtMs(tweet), 'YYYYMMDD'),
   },
   time: {
     description: 'The post time in HHmmss format',
-    extractor: (tweet) => parseTwitterDateTime(tweet.legacy.created_at).format('HHmmss'),
+    extractor: (tweet) => formatDateTime(extractTweetCreatedAtMs(tweet), 'HHmmss'),
   },
   type: {
     description: 'The media type (photo/video/animated_gif)',
@@ -69,7 +70,7 @@ export function extractMedia(
     // For tweets, download media files with custom filenames.
     // NOTE: __typename is undefined in TweetWithVisibilityResults.
     if (item.__typename === 'Tweet' || (typeof item.__typename === 'undefined' && 'core' in item)) {
-      if (!includeRetweets && item.legacy.retweeted_status_result) {
+      if (!includeRetweets && item.legacy?.retweeted_status_result) {
         continue;
       }
 
