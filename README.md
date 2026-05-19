@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/03-menu-commands.png" alt="Scrollmark browser menu commands" width="720" />
+  <img src="docs/screenshots/hero-bookmarks-masonry-research.png" alt="Scrollmark fullscreen bookmarks masonry research view" width="960" />
 
   <h1>Scrollmark</h1>
 
@@ -77,35 +77,79 @@ It is intentionally not a cloud product, not a bot, and not a Twitter/X develope
 <table>
   <tr>
     <td width="42%">
-      <strong>Research explorer</strong><br><br>
-      Open a captured surface, search across indexed records, select rows, switch between table and masonry layouts, and export exactly the subset you care about.
+      <strong>Visual research archive</strong><br><br>
+      Switch the bookmark explorer into fullscreen masonry mode to scan papers, diagrams, design references, screenshots, article cards, and videos as a spatial archive.
       <br><br>
-      <code>Bookmarks</code>, <code>User Tweets</code>, <code>Tweet Details</code>, and imported bundles share the same explorer spine.
+      The masonry view keeps deterministic ordering and folder-aware filtering, so it behaves like an infinite visual feed rather than a static export preview.
     </td>
     <td width="58%">
-      <img src="docs/01-user-interface.png" alt="Scrollmark table explorer" />
+      <img src="docs/screenshots/bookmarks-masonry-search-fullscreen.png" alt="Scrollmark fullscreen bookmarks masonry view" />
+    </td>
+  </tr>
+  <tr>
+    <td width="58%">
+      <img src="docs/screenshots/search-table-from-operator-fixed.png" alt="Scrollmark table search with folder and author filters" />
+    </td>
+    <td width="42%">
+      <strong>Table search and inspection</strong><br><br>
+      Use the table view for dense metadata work: exact snippets, author operators, folders, metrics, dates, media cells, selected-row export, and raw IDs stay visible in one place.
+      <br><br>
+      The search bar supports natural language, exact phrases, boosted phrase windows, boolean logic, exclusions, author shorthand, folders, dates, domains, and dotted metadata fields.
     </td>
   </tr>
   <tr>
     <td width="42%">
-      <strong>Media export</strong><br><br>
-      Download images and videos in bulk, tune export behavior, or copy media URLs for an external downloader.
+      <strong>Portable Bundle Viewer</strong><br><br>
+      Imported bundles reuse the same explorer spine as live bookmarks instead of falling back to a raw JSON scroller.
       <br><br>
-      Media export is separate from canonical bundle export: bundle ZIPs are for portable data archives; media export is for large binary downloads.
+      A collaborator can open a shared archive, search it, filter it, inspect it in masonry mode, and export derived subsets without touching their own live X account data.
     </td>
     <td width="58%">
-      <img src="docs/02-export-media.png" alt="Scrollmark media export modal" />
+      <img src="docs/screenshots/bundle-viewer-fullscreen-clean.png" alt="Scrollmark Bundle Viewer fullscreen masonry view" />
+    </td>
+  </tr>
+  <tr>
+    <td width="58%">
+      <img src="docs/screenshots/export-data-bundle-modal.png" alt="Scrollmark export data and bundle modal" />
+    </td>
+    <td width="42%">
+      <strong>Data and bundle export</strong><br><br>
+      Export selected rows, all current results, or a canonical bundle ZIP for sharing. Bundle export is separate from raw JSON/CSV/HTML export so portable archives can carry manifest metadata and normalized record files.
+      <br><br>
+      Search history export is available when ranking, phrase matching, or repro-quality diagnostics matter.
     </td>
   </tr>
   <tr>
     <td width="42%">
-      <strong>Userscript integration</strong><br><br>
-      Scrollmark is installed as a browser userscript. No X developer account, API key, backend server, or OAuth application is required.
+      <strong>Fast media export</strong><br><br>
+      Download image and video attachments in bulk, tune concurrency and pacing, include metadata sidecars, or copy URL manifests for external tooling.
       <br><br>
-      The release install URL points at the latest GitHub release artifact.
+      Media export is intentionally separate from canonical bundle export: bundle ZIPs are for portable data archives; media export is for large binary downloads.
     </td>
     <td width="58%">
-      <img src="docs/03-menu-commands.png" alt="Scrollmark userscript menu commands" />
+      <img src="docs/screenshots/export-media-modal.png" alt="Scrollmark media export modal" />
+    </td>
+  </tr>
+  <tr>
+    <td width="58%">
+      <img src="docs/screenshots/widget-live-capture-overview.png" alt="Scrollmark live capture widget on X" />
+    </td>
+    <td width="42%">
+      <strong>Live capture widget</strong><br><br>
+      The floating widget tracks module counters while you browse, exposes monitors and Bundle Viewer, and keeps diagnostic controls close without forcing a separate backend or dashboard.
+      <br><br>
+      Scrollmark observes the same browser-loaded GraphQL/API responses the X web app is already using.
+    </td>
+  </tr>
+  <tr>
+    <td width="42%">
+      <strong>Settings and localization</strong><br><br>
+      Configure hook mode, safe mode, repair mode, module monitors, database actions, bundle library, language, theme, and diagnostics from the in-page settings panel.
+      <br><br>
+      The UI has a localization layer rather than hard-coded English-only strings.
+    </td>
+    <td width="58%">
+      <img src="docs/screenshots/settings-panel.png" alt="Scrollmark settings panel" />
     </td>
   </tr>
 </table>
@@ -147,6 +191,10 @@ https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.
 Scrollmark
 By Kyle McCleary
 ```
+
+<p align="center">
+  <img src="docs/screenshots/install-violentmonkey-extension-menu.png" alt="Scrollmark enabled in Violentmonkey" width="420" />
+</p>
 
 ### Chrome note
 
@@ -348,16 +396,21 @@ scrollmark/
 ├─ package.json
 ├─ vite.config.ts
 ├─ docs/
-│  ├─ 01-user-interface.png
-│  ├─ 02-export-media.png
-│  ├─ 03-menu-commands.png
 │  ├─ bundles/
 │  │  └─ canonical-bundle-v1.md
-│  └─ release/
-│     ├─ final-hill-performance-gates.md
-│     ├─ final-release-checklist.md
-│     ├─ store-listing-draft.md
-│     └─ unified-qc-session-runbook.md
+│  ├─ release/
+│  │  ├─ final-hill-performance-gates.md
+│  │  ├─ final-release-checklist.md
+│  │  ├─ store-listing-draft.md
+│  │  └─ unified-qc-session-runbook.md
+│  └─ screenshots/
+│     ├─ README.md
+│     ├─ hero-bookmarks-masonry-research.png
+│     ├─ bookmarks-masonry-search-fullscreen.png
+│     ├─ search-table-from-operator-fixed.png
+│     ├─ bundle-viewer-fullscreen-clean.png
+│     ├─ export-data-bundle-modal.png
+│     └─ export-media-modal.png
 ├─ e2e/
 │  ├─ bundles/
 │  │  └─ canonical_bundle_roundtrip_harness.ts
