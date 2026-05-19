@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Generated benchmark and browser-QC output
+e2e/perf/out/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
