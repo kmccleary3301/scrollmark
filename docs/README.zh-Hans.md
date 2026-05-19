@@ -1,26 +1,26 @@
 <p align="center">
-  <a href="https://github.com/prinsss/twitter-web-exporter">
-    <img alt="twitter-web-exporter" src="https://socialify.git.ci/prinsss/twitter-web-exporter/image?description=1&descriptionEditable=Export%20tweets%2C%20bookmarks%2C%20lists%20and%20much%20more%20from%20Twitter(X)%20web%20app.&font=Raleway&forks=0&issues=0&pattern=Plus&pulls=0&theme=Light&logo=https%3A%2F%2Fcdn.jsdelivr.net%2Fnpm%2F%40tabler%2Ficons%403.19.0%2Ficons%2Foutline%2Fbrand-twitter.svg" />
+  <a href="https://github.com/kmccleary3301/scrollmark">
+    <img alt="Scrollmark" src="https://socialify.git.ci/kmccleary3301/scrollmark/image?description=1&descriptionEditable=Scrollmark%3A%20local-first%20X%2FTwitter%20research%20archive.&font=Raleway&forks=0&issues=0&pattern=Plus&pulls=0&theme=Light&logo=https%3A%2F%2Fcdn.jsdelivr.net%2Fnpm%2F%40tabler%2Ficons%403.19.0%2Ficons%2Foutline%2Fbrand-twitter.svg" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/prinsss/twitter-web-exporter/releases">
+  <a href="https://github.com/kmccleary3301/scrollmark/releases">
     <img alt="UserScript" src="https://badgen.net/badge/userscript/available?color=green" />
   </a>
-  <a href="https://github.com/prinsss/twitter-web-exporter/releases">
-    <img alt="Latest Release" src="https://badgen.net/github/release/prinsss/twitter-web-exporter" />
+  <a href="https://github.com/kmccleary3301/scrollmark/releases">
+    <img alt="Latest Release" src="https://badgen.net/github/release/kmccleary3301/scrollmark" />
   </a>
-  <a href="https://github.com/prinsss/twitter-web-exporter/blob/main/LICENSE">
-    <img alt="License" src="https://badgen.net/github/license/prinsss/twitter-web-exporter" />
+  <a href="https://github.com/kmccleary3301/scrollmark/blob/main/LICENSE">
+    <img alt="License" src="https://badgen.net/github/license/kmccleary3301/scrollmark" />
   </a>
-  <a href="https://github.com/prinsss/twitter-web-exporter">
+  <a href="https://github.com/kmccleary3301/scrollmark">
     <img alt="TypeScript" src="https://badgen.net/badge/icon/typescript?icon=typescript&label" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/prinsss/twitter-web-exporter/blob/main/README.md">English</a>
+  <a href="https://github.com/kmccleary3301/scrollmark/blob/main/README.md">English</a>
    | 简体中文
 </p>
 
@@ -42,7 +42,7 @@
 ## 安装
 
 1. 安装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/) 或 [Violentmonkey](https://violentmonkey.github.io/)
-2. 点击 [这里](https://github.com/prinsss/twitter-web-exporter/releases/latest/download/twitter-web-exporter.user.js) 安装用户脚本
+2. 点击 [这里](https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js) 安装用户脚本
 
 ## 使用方法
 
@@ -50,7 +50,7 @@
 
 如果你看不到猫咪按钮，也看不到如图所示的脚本菜单选项，请检查脚本是否已正确安装并启用。
 
-![03-menu-commands](https://github.com/prinsss/twitter-web-exporter/raw/main/docs/03-menu-commands.png)
+![03-menu-commands](https://github.com/kmccleary3301/scrollmark/raw/main/docs/03-menu-commands.png)
 
 点击 ⚙️ 齿轮按钮打开设置面板。你可以在此处更改 UI 主题并启用/禁用脚本功能。
 
@@ -64,7 +64,7 @@
 
 在浮动面板上会显示已经捕获的数据条数，点击 ↗️ 箭头按钮可以打开数据表视图。你可以在这里预览捕获到的数据并选择要导出的项。
 
-![01-user-interface](https://github.com/prinsss/twitter-web-exporter/raw/main/docs/01-user-interface.png)
+![01-user-interface](https://github.com/kmccleary3301/scrollmark/raw/main/docs/01-user-interface.png)
 
 点击「导出数据」可将捕获到的数据导出为选定的文件格式。目前，脚本支持导出为 JSON、CSV 和 HTML。导出的文件将下载到你的计算机上。
 
@@ -76,7 +76,7 @@
 
 请合理设置「速率限制」选项的值，以避免一次下载太多文件。默认值是 1000，这意味着脚本将在下载每个文件后等待 1 秒。
 
-![02-export-media.png](https://github.com/prinsss/twitter-web-exporter/raw/main/docs/02-export-media.png)
+![02-export-media.png](https://github.com/kmccleary3301/scrollmark/raw/main/docs/02-export-media.png)
 
 ## 局限性
 
@@ -100,7 +100,7 @@
 答：此脚本本身不会向 Twitter API 发起任何请求。它会安装一个 HTTP 网络拦截器，来捕获 Twitter Web App 发起的 GraphQL 请求的响应，然后解析响应并从中提取数据。
 
 **问：脚本抓取不到任何数据！** <br>
-答：参见 [Content-Security-Policy (CSP) Issues #19](https://github.com/prinsss/twitter-web-exporter/issues/19)。
+答：参见 [Content-Security-Policy (CSP) Issues #19](https://github.com/kmccleary3301/scrollmark/issues/19)。
 
 **问：为什么导出的数据不完整？** <br>
 答：脚本只能导出由 Twitter Web App 加载好的数据。由于数据是懒加载的，你需要不断向下滚动以加载更多数据。对于长列表，可能需要滚动到页面底部，确保所有数据加载完毕后再导出。
@@ -127,7 +127,7 @@
 答：无需为 Twitter API 申请开发者帐户。无需将你的私人数据发送到别人的服务器。此脚本完全免费且开源。
 
 **问：脚本无法运行！** <br>
-答：平台升级可能会导致脚本功能故障。如果遇到任何问题，请提交 [issue](https://github.com/prinsss/twitter-web-exporter/issues) 反馈。
+答：平台升级可能会导致脚本功能故障。如果遇到任何问题，请提交 [issue](https://github.com/kmccleary3301/scrollmark/issues) 反馈。
 
 ## 开源许可
 

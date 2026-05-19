@@ -18,6 +18,14 @@ export interface AppOptions {
   safeMode?: boolean;
   hookMode?: 'both' | 'xhr' | 'fetch' | 'off';
   repairMode?: 'watchdog' | 'off';
+  directMessagesCaptureEnabled?: boolean;
+  rawCaptureEncryptedStorageReady?: boolean;
+  rawCapturePolicyPublicEnabled?: boolean;
+  rawCapturePolicySensitiveEnabled?: boolean;
+  rawCapturePolicyDmEnabled?: boolean;
+  rawCaptureEnabled?: boolean;
+  rawCaptureStreamEnabled?: boolean;
+  rawCaptureDaemonUrl?: string;
   version?: string;
 }
 
@@ -25,15 +33,7 @@ export const DEFAULT_APP_OPTIONS: AppOptions = {
   theme: 'system',
   debug: false,
   showControlPanel: true,
-  disabledExtensions: [
-    'HomeTimelineModule',
-    'ListTimelineModule',
-    'ListSubscribersModule',
-    'ListMembersModule',
-    'CommunityMembersModule',
-    'CommunityTimelineModule',
-    'RetweetersModule',
-  ],
+  disabledExtensions: ['HomeTimelineModule'],
   dateTimeFormat: 'YYYY-MM-DD HH:mm:ss Z',
   filenamePattern: '{screen_name}_{id}_{type}_{num}_{date}.{ext}',
   language: '',
@@ -41,6 +41,14 @@ export const DEFAULT_APP_OPTIONS: AppOptions = {
   safeMode: false,
   hookMode: 'both',
   repairMode: 'watchdog',
+  directMessagesCaptureEnabled: false,
+  rawCaptureEncryptedStorageReady: false,
+  rawCapturePolicyPublicEnabled: true,
+  rawCapturePolicySensitiveEnabled: true,
+  rawCapturePolicyDmEnabled: true,
+  rawCaptureEnabled: true,
+  rawCaptureStreamEnabled: false,
+  rawCaptureDaemonUrl: 'http://127.0.0.1:8754',
   version: packageJson.version,
 };
 
@@ -60,6 +68,22 @@ export const THEMES = [
 ] as const;
 
 const LOCAL_STORAGE_KEY = packageJson.name;
+const DISABLED_EXTENSIONS_NO_LONGER_DEFAULT = new Set([
+  'RetweetersModule',
+  'ListTimelineModule',
+  'ListSubscribersModule',
+  'ListMembersModule',
+  'CommunityMembersModule',
+  'CommunityTimelineModule',
+]);
+
+function normalizeDisabledExtensions(value: unknown): string[] {
+  const current = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+  const next = current.filter((item) => !DISABLED_EXTENSIONS_NO_LONGER_DEFAULT.has(item));
+  return Array.from(new Set(next));
+}
 
 /**
  * Persist app options to browser local storage.
@@ -94,6 +118,9 @@ export class AppOptionsManager {
       ...this.appOptions,
       ...safeJSONParse(localStorage.getItem(LOCAL_STORAGE_KEY) || '{}'),
     };
+    this.appOptions.disabledExtensions = normalizeDisabledExtensions(
+      this.appOptions.disabledExtensions,
+    );
 
     const oldVersion = this.appOptions.version ?? '';
     const newVersion = DEFAULT_APP_OPTIONS.version ?? '';
@@ -101,7 +128,7 @@ export class AppOptionsManager {
     // Migrate from v1.0 to v1.1.
     if (newVersion.startsWith('1.1') && oldVersion.startsWith('1.0')) {
       this.appOptions.disabledExtensions = [
-        ...(this.appOptions.disabledExtensions ?? []),
+        ...normalizeDisabledExtensions(this.appOptions.disabledExtensions),
         'HomeTimelineModule',
         'ListTimelineModule',
       ];

@@ -1,31 +1,19 @@
-<p align="center">
-  <a href="https://github.com/prinsss/twitter-web-exporter">
-    <img alt="twitter-web-exporter" src="https://socialify.git.ci/prinsss/twitter-web-exporter/image?description=1&descriptionEditable=Export%20tweets%2C%20bookmarks%2C%20lists%20and%20much%20more%20from%20Twitter(X)%20web%20app.&font=Raleway&forks=0&issues=0&pattern=Plus&pulls=0&theme=Light&logo=https%3A%2F%2Fcdn.jsdelivr.net%2Fnpm%2F%40tabler%2Ficons%403.19.0%2Ficons%2Foutline%2Fbrand-twitter.svg" />
-  </a>
-</p>
+# Scrollmark
 
-<p align="center">
-  <a href="https://github.com/prinsss/twitter-web-exporter/releases">
-    <img alt="UserScript" src="https://badgen.net/badge/userscript/available?color=green" />
-  </a>
-  <a href="https://github.com/prinsss/twitter-web-exporter/releases">
-    <img alt="Latest Release" src="https://badgen.net/github/release/prinsss/twitter-web-exporter" />
-  </a>
-  <a href="https://github.com/prinsss/twitter-web-exporter/blob/main/LICENSE">
-    <img alt="License" src="https://badgen.net/github/license/prinsss/twitter-web-exporter" />
-  </a>
-  <a href="https://github.com/prinsss/twitter-web-exporter">
-    <img alt="TypeScript" src="https://badgen.net/badge/icon/typescript?icon=typescript&label" />
-  </a>
-</p>
+Scrollmark is a local-first X/Twitter research archive, bookmark search tool, media viewer, and portable bundle exporter by Kyle McCleary.
 
-<p align="center">
-  English |
-  <a href="https://github.com/prinsss/twitter-web-exporter/blob/main/docs/README.zh-Hans.md">简体中文</a>
-</p>
+It is built from a substantially overhauled MIT-licensed fork of the original Twitter Web Exporter by prinsss. Original copyright and license notices are preserved.
+
+The project currently keeps the historical internal package/update filenames for compatibility while exposing the release-facing product name `Scrollmark`.
 
 ## Features
 
+- Advanced local search over captured bookmarks/tweets/users with operators, phrases, folder filters, and author shorthand.
+- Portable canonical ZIP bundles for sharing/importing research archives without mutating the recipient's X account.
+- Isolated Bundle Library for viewing/searching imported bundles locally.
+- Fullscreen table and masonry media views for bookmark/tweet research workflows.
+- Workerized search and bundle export paths designed to avoid tab freezes on large local archives.
+- Diagnostics, raw-capture, and performance tooling for debugging browser/runtime behavior.
 - 🚚 Export tweets, replies and likes of any user as JSON/CSV/HTML
 - 🔖 Export your bookmarks (without the max 800 limit!)
 - 💞 Export following, followers list of any user
@@ -42,7 +30,7 @@
 ## Installation
 
 1. Install the browser extension [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)
-2. Click [HERE](https://github.com/prinsss/twitter-web-exporter/releases/latest/download/twitter-web-exporter.user.js) to install the user script
+2. Click [HERE](https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js) to install the user script
 
 ## Usage
 
@@ -50,7 +38,7 @@ Once the script is installed, you can find a floating panel on the left side of 
 
 If you do not see the cat button or the menu options as shown in the image, please check if the script is properly installed and enabled.
 
-![03-menu-commands](https://github.com/prinsss/twitter-web-exporter/raw/main/docs/03-menu-commands.png)
+![03-menu-commands](https://github.com/kmccleary3301/scrollmark/raw/main/docs/03-menu-commands.png)
 
 Click the ⚙️ Cog button to open the settings panel. You can change the UI theme and enable/disable features of script here.
 
@@ -64,7 +52,7 @@ Then open the page that you want to export data from. The script will automatica
 
 The numbers of captured data will be displayed on the floating panel. Click the ↗️ Arrow button to open the data table view. You can preview the data captured here and select which items should be exported.
 
-![01-user-interface](https://github.com/prinsss/twitter-web-exporter/raw/main/docs/01-user-interface.png)
+![01-user-interface](https://github.com/kmccleary3301/scrollmark/raw/main/docs/01-user-interface.png)
 
 Click "Export Data" to export captured data to the selected file format. Currently, the script supports exporting to JSON, CSV and HTML. The exported file will be downloaded to your computer.
 
@@ -76,7 +64,7 @@ All media files will be downloaded at its original size in a zip archive. You ca
 
 Please set a reasonable value for the "Rate limit" option to avoid downloading too many files at once. The default value is 1000 which means the script will wait for 1 second after downloading each file.
 
-![02-export-media.png](https://github.com/prinsss/twitter-web-exporter/raw/main/docs/02-export-media.png)
+![02-export-media.png](https://github.com/kmccleary3301/scrollmark/raw/main/docs/02-export-media.png)
 
 ## Limitation
 
@@ -100,7 +88,7 @@ There is also a limitation on downloading media files. Currently, the script dow
 A. The script itself does not send any request to Twitter API. It installs an network interceptor to capture the response of GraphQL request that initiated by the Twitter web app. The script then parses the response and extracts data from it.
 
 **Q. The script captures nothing!** <br>
-A. See [Content-Security-Policy (CSP) Issues #19](https://github.com/prinsss/twitter-web-exporter/issues/19).
+A. See [Content-Security-Policy (CSP) Issues #19](https://github.com/kmccleary3301/scrollmark/issues/19).
 
 **Q. The exported data is incomplete.** <br>
 A. The script can only export data that is loaded by the Twitter web app. Since the data is lazy-loaded, you need to keep scrolling down to load more data. For long lists, you may need to scroll down to the bottom of the page to make sure that all data is loaded before exporting.
@@ -127,7 +115,7 @@ A: For archival usage. Twitter's archive only contains the numeric user ID of yo
 A: You don't need a developer account for accessing the Twitter API. You don't need to send your private data to someone's server. The script is completely free and open-source.
 
 **Q: The script does not work!** <br>
-A: A platform upgrade will possibly breaks the script's functionality. Please file an [issue](https://github.com/prinsss/twitter-web-exporter/issues) if you encountered any problem.
+A: A platform upgrade will possibly breaks the script's functionality. Please file an [issue](https://github.com/kmccleary3301/scrollmark/issues) if you encountered any problem.
 
 ## License
 

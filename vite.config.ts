@@ -12,6 +12,14 @@ import remToPx from 'postcss-rem-to-pixel-next';
 
 const isE2EBuild =
   process.env.TWE_BUILD_VARIANT === 'e2e' || process.env.TWE_BUILD_STANDALONE === '1';
+const isChromeE2EBuild = process.env.TWE_BUILD_VARIANT === 'chrome-e2e';
+const isLocalE2EBuild = isE2EBuild || isChromeE2EBuild;
+const localDevUserscriptFileName = isChromeE2EBuild
+  ? 'twitter-web-exporter-chrome-e2e.user.js'
+  : 'twitter-web-exporter-e2e.user.js';
+const localDevUserscriptUrl = `http://localhost:8123/greasemonkey_project/twitter-web-exporter/dist/${localDevUserscriptFileName}`;
+const twitterIconPng =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABmklEQVR4Ae3XA4wcARSA4dq2bUQ1g9pRbVtBzai2otpug9pxUttn2753/3m9Ozq/5NsdvvfGM6VKoshE8/ORFbAMbxCGWHzDHjS2sXxPlM0eKYclGoq3w1eIHVGYikaYg6e4ZppgAgQrVBSvDw+IEylIhSAATUyTHIYgFdsUNnAGosAfDMccLMtOchli4g7quFC8FhIhCsRD8Bk1sxMdgVjwxRyUdtDABIgKH9DQNNEkiB1fMB9VbDSwEKLQJ1S1TFQRXhAHYnADy9ETdTEeotAze7tzNJIhCiRBFLpnq/hmzMR65UkVO2WrgaOQPLLW3u6XPDLAVgOl8R5isEhUtHcSdkEoxEBXnN3ZuuMbxCDDnTVQF52xBcEQHX1BaWcNtDLwMpzg6tNtN0RnD5U8XsviGkQnYWih9CWjNBbDHaJBMsZqec8rjV54B1EoFXO0Fh+DrxCFEjBTTdFy6IvNGu4Hf9FXSdGheAUvjZdgLPajqtp3+jl4jVSIAgHYjRZ6fWC0wSpcwScEQZCMUPzEfezEYJQrVRKFOdIAZGq1QBG8EiYAAAAASUVORK5CYII=';
 
 const userscriptRequire = [
   'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js',
@@ -57,21 +65,22 @@ export default defineConfig({
       entry: 'src/main.tsx',
       userscript: {
         name: {
-          '': 'Twitter Web Exporter',
-          'zh-CN': 'Twitter 数据导出工具',
-          'zh-TW': 'Twitter 資料匯出工具',
-          ja: 'Twitter データエクスポーター',
+          '': 'Scrollmark',
+          'zh-CN': 'Scrollmark',
+          'zh-TW': 'Scrollmark',
+          ja: 'Scrollmark',
         },
         description: {
-          '': 'Export tweets, bookmarks, lists and much more to JSON/CSV/HTML from Twitter(X) web app.',
+          '': 'Local-first X/Twitter research archive, search, bookmark capture, and portable bundle export by Kyle McCleary.',
           'zh-CN': '从 Twitter(X) 网页版导出推文、书签、列表等各种数据，支持导出 JSON/CSV/HTML。',
           'zh-TW': '從 Twitter(X) 網頁版匯出推文、書籤、列表等各種資料，支援匯出 JSON/CSV/HTML。',
           ja: 'Twitter(X) ブラウザ版からツイート、ブックマーク、リストなどを取得し JSON/CSV/HTML に出力します。',
         },
-        namespace: 'https://github.com/prinsss',
-        icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABmklEQVR4Ae3XA4wcARSA4dq2bUQ1g9pRbVtBzai2otpug9pxUttn2753/3m9Ozq/5NsdvvfGM6VKoshE8/ORFbAMbxCGWHzDHjS2sXxPlM0eKYclGoq3w1eIHVGYikaYg6e4ZppgAgQrVBSvDw+IEylIhSAATUyTHIYgFdsUNnAGosAfDMccLMtOchli4g7quFC8FhIhCsRD8Bk1sxMdgVjwxRyUdtDABIgKH9DQNNEkiB1fMB9VbDSwEKLQJ1S1TFQRXhAHYnADy9ETdTEeotAze7tzNJIhCiRBFLpnq/hmzMR65UkVO2WrgaOQPLLW3u6XPDLAVgOl8R5isEhUtHcSdkEoxEBXnN3ZuuMbxCDDnTVQF52xBcEQHX1BaWcNtDLwMpzg6tNtN0RnD5U8XsviGkQnYWih9CWjNBbDHaJBMsZqec8rjV54B1EoFXO0Fh+DrxCFEjBTTdFy6IvNGu4Hf9FXSdGheAUvjZdgLPajqtp3+jl4jVSIAgHYjRZ6fWC0wSpcwScEQZCMUPzEfezEYJQrVRKFOdIAZGq1QBG8EiYAAAAASUVORK5CYII=',
+        namespace: 'https://github.com/kmccleary3301/scrollmark',
+        icon: twitterIconPng,
         match: ['*://twitter.com/*', '*://x.com/*', '*://mobile.x.com/*'],
-        grant: ['unsafeWindow'],
+        grant: ['unsafeWindow', 'GM_xmlhttpRequest'],
+        connect: ['cdn.syndication.twimg.com'],
         'run-at': 'document-start',
         // NOTE: X.com currently enforces a strict CSP that can block page-context injection
         // by userscript managers (Violentmonkey inject-into=page). Use content injection
@@ -85,19 +94,21 @@ export default defineConfig({
         // Violentmonkey can inject into page using extension mechanisms; if CSP blocks in
         // some environments, we can re-introduce a content fallback.
         'inject-into': isE2EBuild ? 'content' : 'page',
-        updateURL:
-          'https://github.com/prinsss/twitter-web-exporter/releases/latest/download/twitter-web-exporter.user.js',
-        downloadURL:
-          'https://github.com/prinsss/twitter-web-exporter/releases/latest/download/twitter-web-exporter.user.js',
-        ...(isE2EBuild ? {} : { require: userscriptRequire }),
+        updateURL: isLocalE2EBuild
+          ? localDevUserscriptUrl
+          : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
+        downloadURL: isLocalE2EBuild
+          ? localDevUserscriptUrl
+          : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
+        ...(isLocalE2EBuild ? {} : { require: userscriptRequire }),
       },
       build: {
-        ...(isE2EBuild
+        ...(isLocalE2EBuild
           ? {
-              fileName: 'twitter-web-exporter-e2e.user.js',
+              fileName: localDevUserscriptFileName,
             }
           : {
-              fileName: 'twitter-web-exporter.user.js',
+              fileName: 'scrollmark.user.js',
               externalGlobals: {
                 dayjs: 'dayjs',
                 dexie: 'Dexie',
