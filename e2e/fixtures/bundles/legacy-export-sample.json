@@ -1,0 +1,33 @@
+[
+  {
+    "id": "sample-tweet-1",
+    "full_text": "Exact phrase boosting sample with a harmless link https://t.co/example",
+    "screen_name": "researcher",
+    "profile_name": "Researcher",
+    "media": [
+      {
+        "type": "photo",
+        "thumbnail": "https://pbs.twimg.com/media/sample.jpg?format=jpg&name=small",
+        "original": "https://pbs.twimg.com/media/sample.jpg?format=jpg&name=orig"
+      }
+    ],
+    "metadata": {
+      "__typename": "Tweet",
+      "rest_id": "sample-tweet-1",
+      "legacy": {
+        "full_text": "Exact phrase boosting sample with a harmless link https://t.co/example"
+      },
+      "twe_private_fields": {
+        "created_at": 1770000000000,
+        "updated_at": 1770000000000,
+        "media_count": 1
+      }
+    }
+  },
+  {
+    "id": "sample-user-1",
+    "screen_name": "sample_user",
+    "name": "Sample User",
+    "description": "A user row from legacy JSON export."
+  }
+]

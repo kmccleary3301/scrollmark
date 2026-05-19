@@ -1,0 +1,14 @@
+[
+  {
+    "id": "xss-sample-1",
+    "full_text": "<img src=x onerror=alert('xss')> javascript:alert('xss')",
+    "description": "<svg onload=alert('xss')></svg>",
+    "media": [
+      {
+        "type": "photo",
+        "thumbnail": "javascript:alert('xss')",
+        "original": "javascript:alert('xss')"
+      }
+    ]
+  }
+]
