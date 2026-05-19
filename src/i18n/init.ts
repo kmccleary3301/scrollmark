@@ -20,6 +20,22 @@ export const languageDetector: LanguageDetectorModule = {
   },
 };
 
+const I18N_DEBUG_STORAGE_KEY = 'twe_i18n_debug_v1';
+
+function isTruthyStorageValue(value: string | null): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function shouldEnableI18nDebug(): boolean {
+  try {
+    return isTruthyStorageValue(localStorage.getItem(I18N_DEBUG_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Initialize i18next and return the instance.
  */
@@ -42,7 +58,8 @@ export function initI18n(): i18n {
     defaultNS: 'common',
     fallbackLng: 'en',
     nsSeparator: '::',
-    debug: options.get('debug'),
+    // Keep console quiet by default; opt-in via localStorage key.
+    debug: shouldEnableI18nDebug(),
     resources,
   });
 
