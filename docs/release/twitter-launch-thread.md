@@ -1,16 +1,18 @@
 # Scrollmark Twitter/X Launch Thread Draft
 
+Every tweet below is intended to stay under 280 characters. Media attachment notes are outside the tweet text.
+
 ## Media Attachments
 
 Use these compressed screenshots from `docs/screenshots/store/`:
 
-| Label   | File                                          |
-| ------- | --------------------------------------------- |
-| Media A | `01-scrollmark-visual-research-archive.jpg`   |
+| Label | File |
+| --- | --- |
+| Media A | `01-scrollmark-visual-research-archive.jpg` |
 | Media B | `02-fullscreen-masonry-bookmark-explorer.jpg` |
-| Media C | `03-table-search-author-folder-filters.jpg`   |
-| Media D | `04-portable-bundle-viewer.jpg`               |
-| Media E | `05-data-and-bundle-export.jpg`               |
+| Media C | `03-table-search-author-folder-filters.jpg` |
+| Media D | `04-portable-bundle-viewer.jpg` |
+| Media E | `05-data-and-bundle-export.jpg` |
 
 ## Thread
 
@@ -20,15 +22,13 @@ ATTENTION ALL BOOKMARK ENTHUSIASTS AND LURKERS
 
 If you like bookmarking stuff on Twitter, boy do I have something fun for you.
 
-I spent the last several months passively building a userscript that caches the useful stuff flowing through my browser on Twitter, then gives me a real interface for searching, organizing, exporting, and sharing it.
+I spent months building Scrollmark: a userscript that turns Twitter/X browsing into a local searchable archive.
 
 Attach: Media A, `01-scrollmark-visual-research-archive.jpg`
 
 ### 2/n
 
-It's called Scrollmark.
-
-Links upfront because I hate when people bury them at the bottom:
+Links upfront because burying them at the bottom is annoying:
 
 GitHub:
 https://github.com/kmccleary3301/scrollmark
@@ -43,39 +43,49 @@ https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.
 
 Basic idea:
 
-Twitter already sends a ton of structured data through your browser as you browse.
+Twitter already sends a lot of structured data through your browser as you browse.
 
 Scrollmark watches that stream, parses what it can, and stores it locally.
 
-Bookmarks, bookmark folders, tweets, users, likes, media, threads, quote/retweet surfaces, etc.
-
-No Twitter API key. No backend. No account.
+No Twitter API key. No backend. No cloud account.
 
 ### 4/n
 
-The initial motivation was just that my bookmarks are completely out of control.
+It can pick up bookmarks, bookmark folders, tweets, users, likes, media, threads, quote/retweet surfaces, and other stuff that flows through the web app.
 
-I bookmark research, design refs, papers, model releases, demos, tools, weird arguments, UI screenshots, random “this will matter later” posts, etc.
-
-Twitter's bookmark UI is not remotely enough for this.
+The constraint is simple: if Twitter doesn't load it in your browser, Scrollmark can't parse it.
 
 ### 5/n
 
-So the main view is a real bookmark explorer.
+My own bookmarks were the main motivation.
 
-There's a dense table for search/metadata/export work, and a masonry view for visual scanning.
+I bookmark research, design refs, papers, model releases, demos, tools, weird arguments, UI screenshots, and random “this will matter later” posts.
 
-The masonry view is especially nice for research/design folders, where half the value is in diagrams, screenshots, papers, UI refs, and visual artifacts.
-
-Attach: Media B, `02-fullscreen-masonry-bookmark-explorer.jpg`
+Twitter's bookmark UI is not built for this.
 
 ### 6/n
 
+So the core view is a real bookmark explorer.
+
+Dense table for search/metadata/export work.
+
+Masonry view for visual scanning.
+
+The masonry one is especially good for research/design folders full of diagrams, screenshots, papers, and UI refs.
+
+Attach: Media B, `02-fullscreen-masonry-bookmark-explorer.jpg`
+
+### 7/n
+
 Search was a big part of the work.
 
-You can do normal unstructured searches, exact phrases, phrase boosting, boolean logic, exclusions, folders, authors, dates, domains, media filters, numeric filters, and raw metadata fields.
+It supports unstructured search, exact phrases, phrase boosting, boolean logic, exclusions, folders, authors, dates, domains, media filters, numeric filters, and raw metadata fields.
 
-Examples:
+Attach: Media C, `03-table-search-author-folder-filters.jpg`
+
+### 8/n
+
+Example searches:
 
 ```text
 "full writeup on how"
@@ -84,19 +94,17 @@ folder:"Design 02" has:media
 domain:github.com min_likes:50
 ```
 
-Attach: Media C, `03-table-search-author-folder-filters.jpg`
+Goal was closer to “Google over my bookmarks” than browser find.
 
-### 7/n
-
-The goal was closer to “Google over my bookmarks” than browser find.
+### 9/n
 
 Unstructured queries expand into term matches + boosted phrase windows.
 
 Then you can get more surgical with operators when you know the slice you want.
 
-It's not ParadeDB-level magic, but it's now fast enough and expressive enough to be genuinely useful.
+Not ParadeDB-level magic, but now fast enough and expressive enough to be useful.
 
-### 8/n
+### 10/n
 
 Performance was painful.
 
@@ -104,19 +112,15 @@ Early versions would happily nuke the browser if I opened a big bookmark table o
 
 Now it uses paged IndexedDB reads, virtualized rows, worker-backed search, stale query cancellation, and deterministic masonry paging.
 
-The boring stuff, but it matters.
-
-### 9/n
+### 11/n
 
 My favorite use case is mining a narrow research slice.
 
-I'll filter down to a folder/category, export a bundle, and pass it to GPT-5.5 Pro or another agent to pull apart.
+Filter to a folder/category, export a bundle, and pass it to GPT-5.5 Pro or another agent to pull apart.
 
-“Here are 300 AI research bookmarks. Cluster them, find the useful papers, extract themes, surface contradictions, tell me what to read first.”
+“Here are 300 AI research bookmarks. Cluster them and tell me what to read first.”
 
-Very good workflow.
-
-### 10/n
+### 12/n
 
 This is why bundle export/import exists.
 
@@ -124,79 +128,79 @@ You can package a slice of your archive as a portable ZIP, send it to someone el
 
 It does not touch their real Twitter bookmarks.
 
-It's just a local, searchable, browsable research bundle.
-
 Attach: Media D, `04-portable-bundle-viewer.jpg`
 
-### 11/n
+### 13/n
 
-I think this is one of the more underrated parts.
+I think bundles are one of the more useful parts.
 
 Twitter bookmarks contain a lot of latent social/research value, but they're trapped in private junk drawers.
 
-Bundles make it plausible to share “here is my current RL infra reading set” or “here are 500 design refs I actually like” in a usable form.
+Bundles make “here is my RL infra reading set” a usable object.
 
-### 12/n
+### 14/n
 
-Exports are also built in.
+Exports are built in.
 
 Selected rows, current results, JSON/CSV/HTML, portable bundles, media URLs, and bulk media.
 
-The media export is useful if you want to hand a folder to an agent, build a reference board, preserve a research/design set, or just get the raw assets out of Twitter.
+Useful for agent analysis, reference boards, archival, or just getting raw assets out of Twitter.
 
 Attach: Media E, `05-data-and-bundle-export.jpg`
 
-### 13/n
+### 15/n
 
 This technically started as a fork of this project:
 
 https://github.com/prinsss/twitter-web-exporter
 
-But it is very much Ship of Theseus at this point.
+But it is very much Ship of Theseus now.
 
-I had to rebuild or heavily overhaul the parser, DB layer, search, UI, exports, media handling, diagnostics, performance path, bundle system, and release flow.
+The parser, DB, search, UI, exports, diagnostics, performance path, bundles, and release flow were all rebuilt/heavily changed.
 
-### 14/n
+### 16/n
 
 A lot of the work was just fighting Twitter and browser weirdness.
 
 GraphQL response shapes, bookmark folder behavior, article posts, CSP, userscript injection, Firefox vs Chrome quirks, stale search loops, scroll virtualization, media URL edge cases, memory overhead, etc.
 
-All the dumb invisible stuff.
-
-### 15/n
+### 17/n
 
 There is also a lot of diagnostic machinery now.
 
 Raw capture bundles, search history export, parser diagnostics, perf counters, safe mode, repair mode, etc.
 
-Mostly because Twitter changes constantly and I needed a way to hand agents enough evidence to debug things without me manually reproducing every failure forever.
+Mostly so I could hand agents enough evidence to debug things without manually reproducing every failure forever.
 
-### 16/n
+### 18/n
 
-Also: it has 10-language UI support now.
+It has 10-language UI support now too.
 
-Not saying the translations are sacred literature, but the UI text is at least centralized/localized instead of being hard-coded all over the app.
+Not saying the translations are sacred literature, but the UI text is centralized/localized instead of hard-coded all over the app.
 
-That was one of the late cleanup passes before trying to make it public.
+That was one of the late cleanup passes before making it public.
 
-### 17/n
+### 19/n
 
 Important clarification:
 
 This is local-first tooling.
 
-It does not run a cloud service, does not sync your archive to me, does not need a Twitter API key, and does not mutate your account when viewing imported bundles.
+It does not run a cloud service, sync your archive to me, need a Twitter API key, or mutate your account when viewing imported bundles.
 
-It watches what your browser already loads, parses it, and stores it locally.
+It watches what your browser already loads and stores parsed data locally.
 
-### 18/n
+### 20/n
 
-Anyway, I expect bugs because Twitter is Twitter, but it is now useful enough that I want other bookmark freaks to try it.
+Anyway, I expect bugs because Twitter is Twitter, but it is useful enough that I want other bookmark freaks to try it.
 
 If something breaks, the most useful thing is a diagnostic bundle + short repro.
 
-And if you use it to make a good research/design bundle, send it to me. I want to see what people do with this.
+And if you make a good research/design bundle, send it to me.
+
+### 21/n
+
+Links again:
 
 GitHub:
 https://github.com/kmccleary3301/scrollmark
