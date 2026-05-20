@@ -1,0 +1,92 @@
+name: macOS Browser Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      corpus_size:
+        description: Synthetic bookmark/tweet rows to generate for the browser smoke harness.
+        required: false
+        default: '5000'
+      browsers:
+        description: Comma-separated Playwright browsers to run.
+        required: false
+        default: chromium,firefox
+
+permissions:
+  contents: read
+
+jobs:
+  browser-smoke:
+    name: Browser Smoke (${{ inputs.browsers }})
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build userscript variants
+        run: npm run build:all
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium firefox
+
+      - name: Generate browser smoke corpus
+        run: |
+          mkdir -p e2e/perf/out/macos-browser-smoke
+          node e2e/perf/generate_corpus.mjs \
+            e2e/perf/out/macos-browser-smoke/synthetic-tweets.json \
+            "${{ inputs.corpus_size }}"
+
+      - name: Run browser viewer scroll smoke
+        run: |
+          node e2e/perf/browser_viewer_scroll_harness.mjs \
+            e2e/perf/out/macos-browser-smoke/synthetic-tweets.json \
+            e2e/perf/out/macos-browser-smoke/browser-viewer-scroll.json \
+            --browsers="${{ inputs.browsers }}"
+
+      - name: Print smoke summary
+        if: always()
+        run: |
+          if [ -f e2e/perf/out/macos-browser-smoke/browser-viewer-scroll.json ]; then
+            node - <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('e2e/perf/out/macos-browser-smoke/browser-viewer-scroll.json', 'utf8'));
+          const results = Array.isArray(report.results) ? report.results : report;
+          for (const result of results) {
+            console.log(JSON.stringify({
+              browser: result.browser,
+              ok: result.ok,
+              records: result.records,
+              init_ms: result.init_ms,
+              table_blank_violations: result.table?.blank_violations,
+              table_duplicate_violations: result.table?.duplicate_violations,
+              masonry_blank_violations: result.masonry_all?.blank_violations,
+              masonry_duplicate_violations: result.masonry_all?.duplicate_violations,
+              p95_frame_ms: result.frame_summary?.p95_ms,
+              max_long_task_ms: result.max_long_task_ms,
+              gates: result.gates,
+              error: result.error,
+            }, null, 2));
+          }
+          NODE
+          else
+            echo 'No browser-viewer-scroll.json was produced.'
+          fi
+
+      - name: Upload smoke artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-browser-smoke-artifacts
+          path: e2e/perf/out/macos-browser-smoke/
+          if-no-files-found: warn
