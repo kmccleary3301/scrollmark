@@ -1,0 +1,219 @@
+<h2>Scrollmark</h2>
+
+<p>
+  <strong>Scrollmark</strong> is a local-first research archive for X/Twitter. It captures useful
+  data that already flows through the X web app while you browse, stores it locally in your browser,
+  and gives you a fast explorer for search, review, export, and sharing.
+</p>
+
+<p>
+  It is built for researchers, designers, engineers, writers, and high-signal collectors who use
+  bookmarks as a working memory system and need something more serious than a flat export file.
+</p>
+
+<h3>What it does</h3>
+
+<p>
+  Scrollmark observes X/Twitter web-app API responses in your browser and indexes supported records
+  into local IndexedDB storage.
+</p>
+
+<p>Core surfaces include:</p>
+
+<ul>
+  <li>Bookmarks and bookmark folders.</li>
+  <li>Tweets, tweet details, user tweets, likes, retweeters, quotes, and user details.</li>
+  <li>Followers/following surfaces where X exposes them to the page.</li>
+  <li>Tweet media, article previews, cards, profile metadata, and useful timeline metadata.</li>
+  <li>Imported portable bundles shared by other Scrollmark users.</li>
+</ul>
+
+<p>
+  The script can only capture data that the X web app loads in your browser. It is not an autonomous
+  scraping bot, not a cloud sync service, and not a Twitter/X developer API client.
+</p>
+
+<h3>Main features</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>What it gives you</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Local capture</td>
+      <td>Build a private archive naturally while browsing X.</td>
+    </tr>
+    <tr>
+      <td>Search</td>
+      <td>
+        Search with natural language, exact phrases, boolean logic, exclusions, author filters,
+        folder filters, dates, domains, media filters, and raw metadata fields.
+      </td>
+    </tr>
+    <tr>
+      <td>Table explorer</td>
+      <td>Inspect dense metadata, select rows, and export exact subsets.</td>
+    </tr>
+    <tr>
+      <td>Masonry media view</td>
+      <td>Scan visual bookmarks in a fullscreen designer-oriented media layout.</td>
+    </tr>
+    <tr>
+      <td>Bundle export/import</td>
+      <td>
+        Share portable research collections as canonical ZIP bundles without mutating anyone's live
+        X account data.
+      </td>
+    </tr>
+    <tr>
+      <td>Data export</td>
+      <td>Export selected rows or result sets as JSON, CSV, HTML, or bundle ZIP.</td>
+    </tr>
+    <tr>
+      <td>Media export</td>
+      <td>Bulk export tweet images/videos with configurable behavior.</td>
+    </tr>
+    <tr>
+      <td>Diagnostics</td>
+      <td>
+        Export diagnostic bundles when parser, performance, or browser-runtime issues need
+        investigation.
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Search examples</h3>
+
+<pre><code>distributed systems design
+&quot;full writeup on how&quot;
+@sama agent systems
+from:alice (&quot;design system&quot;~2 OR reliability)
+folder:&quot;Design 02&quot; has:media
+domain:github.com min_likes:50
+since:2026-03-01 until:2026-03-31 -filter:replies</code></pre>
+
+<p>
+  Plain multi-term searches are expanded with boosted adjacent phrase windows. Quoted phrases are
+  treated as phrase constraints. Metadata operators narrow the candidate set before ranking.
+</p>
+
+<h3>Typical workflow</h3>
+
+<ol>
+  <li>Install Scrollmark with a userscript manager.</li>
+  <li>Open X/Twitter normally.</li>
+  <li>
+    Browse timelines, bookmarks, bookmark folders, profiles, tweet threads, likes, or other
+    supported surfaces.
+  </li>
+  <li>Watch the Scrollmark widget counters increment as supported data is parsed.</li>
+  <li>Open the Bookmarks explorer or another module.</li>
+  <li>Search and filter the archive.</li>
+  <li>
+    Switch between table view and masonry view depending on whether you want metadata inspection or
+    visual scanning.
+  </li>
+  <li>Export selected records, current results, media, diagnostics, or a portable bundle.</li>
+</ol>
+
+<h3>Privacy model</h3>
+
+<p>Scrollmark is local-first:</p>
+
+<ul>
+  <li>Captured data is stored in your browser's IndexedDB.</li>
+  <li>There is no Scrollmark cloud service.</li>
+  <li>There is no account registration for Scrollmark.</li>
+  <li>
+    Bundle import is local viewing/searching only; it does not bookmark, like, follow, post, create
+    folders, or otherwise mutate your X account.
+  </li>
+  <li>Diagnostic exports are user-triggered files that you choose whether to share.</li>
+</ul>
+
+<h3>Permissions</h3>
+
+<p>
+  Scrollmark requests permissions needed for a userscript that runs inside the X/Twitter web app:
+</p>
+
+<ul>
+  <li>
+    <code>unsafeWindow</code> is used to observe web-app runtime/network behavior from the
+    userscript environment.
+  </li>
+  <li>
+    <code>GM_xmlhttpRequest</code> is used for controlled media/export support where normal page
+    fetch semantics are insufficient.
+  </li>
+  <li><code>@connect cdn.syndication.twimg.com</code> supports X/Twitter embed/media handling.</li>
+</ul>
+
+<p>The script matches:</p>
+
+<pre><code>twitter.com
+x.com
+mobile.x.com</code></pre>
+
+<h3>Browser support</h3>
+
+<p>Recommended setups:</p>
+
+<ul>
+  <li>Firefox with Violentmonkey or Tampermonkey.</li>
+  <li>Chrome with Tampermonkey and user scripts enabled.</li>
+</ul>
+
+<p>
+  Chrome users may need to enable <code>Allow user scripts</code> for Tampermonkey in
+  <code>chrome://extensions</code>.
+</p>
+
+<h3>Limitations</h3>
+
+<ul>
+  <li>Scrollmark can only parse records that X loads into your browser.</li>
+  <li>X can change GraphQL/API response shapes, which may require parser updates.</li>
+  <li>
+    Very large media exports are constrained by browser memory, download behavior, and local disk
+    speed.
+  </li>
+  <li>Imported bundles are not synced back into your real X bookmarks.</li>
+  <li>
+    This is a powerful local archiving tool, not a general-purpose automation or scraping service.
+  </li>
+</ul>
+
+<h3>Links</h3>
+
+<ul>
+  <li><a href="https://github.com/kmccleary3301/scrollmark">GitHub repository</a></li>
+  <li><a href="https://github.com/kmccleary3301/scrollmark/issues">Issues and support</a></li>
+  <li><a href="https://github.com/kmccleary3301/scrollmark#readme">Full README</a></li>
+  <li>
+    <a
+      href="https://github.com/kmccleary3301/scrollmark/blob/main/docs/bundles/canonical-bundle-v1.md"
+      >Bundle format docs</a
+    >
+  </li>
+  <li>
+    <a
+      href="https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js"
+      >Direct GitHub release install</a
+    >
+  </li>
+</ul>
+
+<h3>Attribution</h3>
+
+<p>
+  Scrollmark is maintained by Kyle McCleary. It began as an MIT-licensed fork of
+  <code>prinsss/twitter-web-exporter</code>, but has since been rebuilt and overhauled across
+  capture, search, storage, UI, bundle import/export, diagnostics, performance, branding, and
+  release workflows. Original copyright and license notices are preserved.
+</p>
