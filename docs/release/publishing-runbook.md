@@ -8,6 +8,7 @@ This runbook covers the release path for GitHub Releases and userscript marketpl
 | ---------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------- |
 | `dist/scrollmark.user.js`                      | Direct GitHub install/update URL  | Includes GitHub Release `@downloadURL` and `@updateURL`.                                      |
 | `dist/scrollmark.store.user.js`                | Greasy Fork/OpenUserJS submission | Same runtime code, but omits `@downloadURL` and `@updateURL` so the store can manage updates. |
+| `store/scrollmark.user.js`                     | Marketplace GitHub sync target    | Stable repo path copied from `dist/scrollmark.store.user.js` during `npm run build:all`.      |
 | `dist/twitter-web-exporter-e2e.user.js`        | Local Firefox/e2e QC only         | Uses localhost install/update URL. Do not publish.                                            |
 | `dist/twitter-web-exporter-chrome-e2e.user.js` | Local Chrome/e2e QC only          | Uses localhost install/update URL. Do not publish.                                            |
 
@@ -35,6 +36,7 @@ Expected production outputs:
 ```text
 dist/scrollmark.user.js
 dist/scrollmark.store.user.js
+store/scrollmark.user.js
 dist/twitter-web-exporter-e2e.user.js
 dist/twitter-web-exporter-chrome-e2e.user.js
 ```
@@ -52,6 +54,7 @@ npm run check:metadata
 mkdir -p release-artifacts
 cp dist/scrollmark.user.js release-artifacts/scrollmark.user.js
 cp dist/scrollmark.store.user.js release-artifacts/scrollmark.store.user.js
+cp store/scrollmark.user.js release-artifacts/scrollmark.github-sync.user.js
 (cd release-artifacts && sha256sum *.user.js > SHA256SUMS.txt)
 gh release create "v${VERSION}" release-artifacts/* \
   --repo kmccleary3301/scrollmark \
@@ -64,9 +67,15 @@ Canonical direct install URL:
 https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js
 ```
 
+Stable marketplace sync URL:
+
+```text
+https://raw.githubusercontent.com/kmccleary3301/scrollmark/main/store/scrollmark.user.js
+```
+
 ## Greasy Fork
 
-Use `dist/scrollmark.store.user.js`.
+Use `store/scrollmark.user.js` for GitHub sync or `dist/scrollmark.store.user.js` for manual upload.
 
 Recommended flow:
 
@@ -75,13 +84,17 @@ Recommended flow:
 3. Use the listing copy from `docs/release/store-listing-draft.md`.
 4. Add current screenshots from `docs/screenshots/`.
 5. Confirm the store does not reject external `@require` URLs.
-6. If the store accepts GitHub sync for this script, point it at the store artifact source path, not the direct-install release artifact.
+6. If the store accepts GitHub sync for this script, point it at:
+
+```text
+https://raw.githubusercontent.com/kmccleary3301/scrollmark/main/store/scrollmark.user.js
+```
 
 Do not submit local e2e artifacts.
 
 ## OpenUserJS
 
-Use `dist/scrollmark.store.user.js`.
+Use `store/scrollmark.user.js` for GitHub sync or `dist/scrollmark.store.user.js` for manual upload.
 
 Recommended flow:
 
@@ -90,6 +103,12 @@ Recommended flow:
 3. Use the listing copy from `docs/release/store-listing-draft.md`.
 4. Add repository, issue tracker, and screenshots.
 5. Configure GitHub sync only if it preserves the store-safe artifact semantics.
+
+Recommended sync URL:
+
+```text
+https://raw.githubusercontent.com/kmccleary3301/scrollmark/main/store/scrollmark.user.js
+```
 
 Do not submit local e2e artifacts.
 

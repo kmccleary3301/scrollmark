@@ -42,6 +42,7 @@ jobs:
           path: |
             dist/scrollmark.user.js
             dist/scrollmark.store.user.js
+            store/scrollmark.user.js
             dist/twitter-web-exporter-e2e.user.js
             dist/twitter-web-exporter-chrome-e2e.user.js
           if-no-files-found: error

@@ -8,6 +8,7 @@ const files = process.argv.slice(2);
 const defaultFiles = [
   'dist/scrollmark.user.js',
   'dist/scrollmark.store.user.js',
+  'store/scrollmark.user.js',
   'dist/twitter-web-exporter-e2e.user.js',
   'dist/twitter-web-exporter-chrome-e2e.user.js',
 ];
@@ -50,8 +51,8 @@ for (const file of targets) {
   const source = readFileSync(file, 'utf8');
   const metadata = parseMetadata(source, file);
   const name = basename(file);
-  const isStore = name === 'scrollmark.store.user.js';
-  const isRelease = name === 'scrollmark.user.js';
+  const isStore = name === 'scrollmark.store.user.js' || file === 'store/scrollmark.user.js';
+  const isRelease = name === 'scrollmark.user.js' && file !== 'store/scrollmark.user.js';
   const isE2E = name.includes('e2e');
 
   assert(one(metadata, 'name', file) === 'Scrollmark', `${file}: @name must be Scrollmark`);

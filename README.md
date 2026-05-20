@@ -36,6 +36,8 @@
     <a href="docs/release/store-listing-draft.md">Store Listing Draft</a>
     ·
     <a href="docs/release/publishing-runbook.md">Publishing Runbook</a>
+    ·
+    <a href="store/scrollmark.user.js">Store Sync Artifact</a>
   </p>
 </div>
 

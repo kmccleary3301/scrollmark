@@ -47,6 +47,7 @@ jobs:
           mkdir -p release-artifacts
           cp dist/scrollmark.user.js release-artifacts/scrollmark.user.js
           cp dist/scrollmark.store.user.js release-artifacts/scrollmark.store.user.js
+          cp store/scrollmark.user.js release-artifacts/scrollmark.github-sync.user.js
           (cd release-artifacts && sha256sum *.user.js > SHA256SUMS.txt)
           VERSION="$(node -p "require('./package.json').version")"
           {
@@ -64,6 +65,7 @@ jobs:
             printf '%s\n' ""
             printf '%s\n' "- \`scrollmark.user.js\`: canonical direct-install/update artifact for userscript managers."
             printf '%s\n' "- \`scrollmark.store.user.js\`: store-safe artifact for Greasy Fork/OpenUserJS submission. Runtime code is equivalent, but marketplace-managed update URLs are not overridden."
+            printf '%s\n' "- \`scrollmark.github-sync.user.js\`: release copy of the store-safe GitHub sync artifact."
             printf '%s\n' "- \`SHA256SUMS.txt\`: release artifact checksums."
             printf '%s\n' ""
             printf '%s\n' "## Compatibility"
@@ -80,6 +82,7 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             release-artifacts/scrollmark.user.js \
             release-artifacts/scrollmark.store.user.js \
+            release-artifacts/scrollmark.github-sync.user.js \
             release-artifacts/SHA256SUMS.txt \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Scrollmark ${GITHUB_REF_NAME}" \
