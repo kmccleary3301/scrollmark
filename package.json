@@ -9,11 +9,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "clean": "rm -rf dist",
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:store": "tsc && SCROLLMARK_BUILD_TARGET=store vite build",
     "build:e2e": "tsc && TWE_BUILD_VARIANT=e2e vite build",
+    "build:chrome-e2e": "tsc && TWE_BUILD_VARIANT=chrome-e2e vite build",
+    "build:all": "npm run clean && npm run build && npm run build:store && npm run build:e2e && npm run build:chrome-e2e",
     "prepare": "husky",
     "lint": "eslint .",
+    "check:metadata": "node scripts/check-userscript-metadata.mjs",
     "commitlint": "commitlint --edit",
     "changelog": "git-cliff -o CHANGELOG.md",
     "preview": "vite preview"

@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package version
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "v${VERSION}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version v${VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build release artifacts
+        run: npm run build:all
+
+      - name: Validate userscript metadata
+        run: npm run check:metadata
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-artifacts
+          cp dist/scrollmark.user.js release-artifacts/scrollmark.user.js
+          cp dist/scrollmark.store.user.js release-artifacts/scrollmark.store.user.js
+          (cd release-artifacts && sha256sum *.user.js > SHA256SUMS.txt)
+          VERSION="$(node -p "require('./package.json').version")"
+          {
+            printf '%s\n' "# Scrollmark v${VERSION}"
+            printf '%s\n' ""
+            printf '%s\n' "Scrollmark is a local-first X/Twitter research archive, search workbench, media viewer, and portable bundle system maintained by Kyle McCleary."
+            printf '%s\n' ""
+            printf '%s\n' "## Install"
+            printf '%s\n' ""
+            printf '%s\n' "Production userscript:"
+            printf '%s\n' ""
+            printf '%s\n' "https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js"
+            printf '%s\n' ""
+            printf '%s\n' "## Assets"
+            printf '%s\n' ""
+            printf '%s\n' "- \`scrollmark.user.js\`: canonical direct-install/update artifact for userscript managers."
+            printf '%s\n' "- \`scrollmark.store.user.js\`: store-safe artifact for Greasy Fork/OpenUserJS submission. Runtime code is equivalent, but marketplace-managed update URLs are not overridden."
+            printf '%s\n' "- \`SHA256SUMS.txt\`: release artifact checksums."
+            printf '%s\n' ""
+            printf '%s\n' "## Compatibility"
+            printf '%s\n' ""
+            printf '%s\n' "- Firefox userscript managers including Violentmonkey/Tampermonkey where supported."
+            printf '%s\n' "- Chrome Tampermonkey with user scripts enabled."
+            printf '%s\n' "- Routes: \`x.com\`, \`twitter.com\`, and \`mobile.x.com\`."
+          } > release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            release-artifacts/scrollmark.user.js \
+            release-artifacts/scrollmark.store.user.js \
+            release-artifacts/SHA256SUMS.txt \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Scrollmark ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md

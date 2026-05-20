@@ -13,6 +13,7 @@ import remToPx from 'postcss-rem-to-pixel-next';
 const isE2EBuild =
   process.env.TWE_BUILD_VARIANT === 'e2e' || process.env.TWE_BUILD_STANDALONE === '1';
 const isChromeE2EBuild = process.env.TWE_BUILD_VARIANT === 'chrome-e2e';
+const isStoreBuild = process.env.SCROLLMARK_BUILD_TARGET === 'store';
 const isLocalE2EBuild = isE2EBuild || isChromeE2EBuild;
 const localDevUserscriptFileName = isChromeE2EBuild
   ? 'twitter-web-exporter-chrome-e2e.user.js'
@@ -42,6 +43,7 @@ export default defineConfig({
     },
   },
   build: {
+    emptyOutDir: false,
     minify: false,
   },
   css: {
@@ -94,12 +96,16 @@ export default defineConfig({
         // Violentmonkey can inject into page using extension mechanisms; if CSP blocks in
         // some environments, we can re-introduce a content fallback.
         'inject-into': isE2EBuild ? 'content' : 'page',
-        updateURL: isLocalE2EBuild
-          ? localDevUserscriptUrl
-          : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
-        downloadURL: isLocalE2EBuild
-          ? localDevUserscriptUrl
-          : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
+        ...(isStoreBuild
+          ? {}
+          : {
+              updateURL: isLocalE2EBuild
+                ? localDevUserscriptUrl
+                : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
+              downloadURL: isLocalE2EBuild
+                ? localDevUserscriptUrl
+                : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
+            }),
         ...(isLocalE2EBuild ? {} : { require: userscriptRequire }),
       },
       build: {
@@ -108,7 +114,7 @@ export default defineConfig({
               fileName: localDevUserscriptFileName,
             }
           : {
-              fileName: 'scrollmark.user.js',
+              fileName: isStoreBuild ? 'scrollmark.store.user.js' : 'scrollmark.user.js',
               externalGlobals: {
                 dayjs: 'dayjs',
                 dexie: 'Dexie',
