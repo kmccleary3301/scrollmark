@@ -13,6 +13,7 @@
 
   <p>
     <a href="https://github.com/kmccleary3301/scrollmark/releases/latest"><img alt="Version" src="https://img.shields.io/badge/version-1.0.0-ff66b3?style=for-the-badge"></a>
+    <a href="https://github.com/kmccleary3301/scrollmark/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kmccleary3301/scrollmark/ci.yml?branch=main&label=CI&style=for-the-badge"></a>
     <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge"></a>
     <a href="https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js"><img alt="Install userscript" src="https://img.shields.io/badge/install-userscript-7c3aed?style=for-the-badge"></a>
     <img alt="Browsers" src="https://img.shields.io/badge/browsers-Firefox%20%7C%20Chrome-2563eb?style=for-the-badge">
@@ -33,6 +34,8 @@
     <a href="docs/release/final-hill-performance-gates.md">Performance Gates</a>
     ·
     <a href="docs/release/store-listing-draft.md">Store Listing Draft</a>
+    ·
+    <a href="docs/release/publishing-runbook.md">Publishing Runbook</a>
   </p>
 </div>
 
