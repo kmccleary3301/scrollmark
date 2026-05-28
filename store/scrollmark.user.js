@@ -4,7 +4,7 @@
 // @name:zh-TW         Scrollmark
 // @name:ja            Scrollmark
 // @namespace          https://github.com/kmccleary3301/scrollmark
-// @version            1.0.0
+// @version            1.0.1
 // @author             Kyle McCleary
 // @description        Local-first X/Twitter research archive, search, bookmark capture, and portable bundle export by Kyle McCleary.
 // @description:zh-CN  本地优先的 X/Twitter 研究归档、搜索、书签采集与可移植 Bundle 导出工具。
@@ -681,7 +681,7 @@
   }
   const name = "scrollmark";
   const description = "Scrollmark: local-first X/Twitter research archive, search, and portable bundle export.";
-  const version = "1.0.0";
+  const version = "1.0.1";
   const author = "Kyle McCleary";
   const license = "MIT";
   const homepage = "https://github.com/kmccleary3301/scrollmark";
@@ -7494,14 +7494,25 @@
   const DB_VERSION = 6;
   const CAPTURE_COUNT_SNAPSHOT_KEY$1 = "__twe_capture_counts_v1";
   const CAPTURE_COUNT_SNAPSHOT_V2_KEY$1 = "__twe_capture_counts_v2";
-  const ACTIVE_DB_NAME_KEY$1 = "__twe_active_db_name_v1";
+  const ACTIVE_DB_NAME_KEY$2 = "__twe_active_db_name_v1";
   const CAPTURE_COUNT_EVENT_NAME$1 = "twe:capture-count-updated-v1";
+  const DB_WRITE_CHUNK_SIZE = 500;
   const BOOKMARK_CONTEXT_FIELDS = [
     "__bookmark_folder_id",
     "__bookmark_folder_name",
     "__bookmark_folder_name_source",
     "__bookmark_folder_url"
   ];
+  function chunkArray(items, size) {
+    if (items.length <= size) {
+      return [items];
+    }
+    const chunks = [];
+    for (let index = 0; index < items.length; index += size) {
+      chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
+  }
   function readPath$1(obj, path) {
     let current = obj;
     for (const part of path.split(".")) {
@@ -7555,6 +7566,7 @@
   class DatabaseManager {
     constructor() {
       __publicField(this, "db");
+      __publicField(this, "writeQueue", Promise.resolve());
       var _a2;
       let userId = "unknown";
       try {
@@ -7568,6 +7580,17 @@
       this.db = new Dexie(`${DB_NAME}${suffix}`);
       this.publishActiveDatabaseName();
       this.init();
+    }
+    enqueueWrite(operation, write) {
+      const run = this.writeQueue.then(write, write);
+      this.writeQueue = run.then(
+        () => void 0,
+        () => void 0
+      );
+      return run.catch((error) => {
+        this.logError(error, operation);
+        throw error;
+      });
     }
     /*
     |--------------------------------------------------------------------------
@@ -7780,50 +7803,74 @@
     |--------------------------------------------------------------------------
     */
     async extAddTweets(extName, tweets) {
-      if (!tweets.length) {
+      const normalizedTweets = this.normalizeRowsByRestId(tweets);
+      if (!normalizedTweets.length) {
         return;
       }
-      await this.upsertTweets(tweets);
-      await this.upsertCaptures(
-        tweets.map((tweet) => ({
+      await this.enqueueWrite("extAddTweets", async () => {
+        const now = Date.now();
+        const captures = normalizedTweets.map((tweet) => ({
           id: `${extName}-${tweet.rest_id}`,
           extension: extName,
           type: ExtensionType.TWEET,
           data_key: tweet.rest_id,
-          created_at: Date.now()
-        }))
-      );
-      await this.upsertSearchDocuments(this.buildTweetSearchDocuments(extName, tweets));
-      emitDatabaseMutation({
-        extension: extName,
-        operation: "extAddTweets",
-        count: tweets.length,
-        keys: tweets.map((tweet) => tweet.rest_id)
+          created_at: now
+        }));
+        const documents = this.buildTweetSearchDocuments(extName, normalizedTweets);
+        await this.db.transaction(
+          "rw",
+          this.tweets(),
+          this.captures(),
+          this.searchDocuments(),
+          async () => {
+            await this.putMergedTweets(normalizedTweets);
+            await this.bulkPutInChunks(this.captures(), captures);
+            await this.bulkPutInChunks(this.searchDocuments(), documents);
+          }
+        );
+        emitDatabaseMutation({
+          extension: extName,
+          operation: "extAddTweets",
+          count: normalizedTweets.length,
+          keys: normalizedTweets.map((tweet) => tweet.rest_id)
+        });
+        void this.publishCaptureCountSnapshot(extName);
       });
-      void this.publishCaptureCountSnapshot(extName);
     }
     async extAddUsers(extName, users) {
-      if (!users.length) {
+      const normalizedUsers = this.normalizeRowsByRestId(users);
+      if (!normalizedUsers.length) {
         return;
       }
-      await this.upsertUsers(users);
-      await this.upsertCaptures(
-        users.map((user) => ({
+      await this.enqueueWrite("extAddUsers", async () => {
+        const now = Date.now();
+        const captures = normalizedUsers.map((user) => ({
           id: `${extName}-${user.rest_id}`,
           extension: extName,
           type: ExtensionType.USER,
           data_key: user.rest_id,
-          created_at: Date.now()
-        }))
-      );
-      await this.upsertSearchDocuments(this.buildUserSearchDocuments(extName, users));
-      emitDatabaseMutation({
-        extension: extName,
-        operation: "extAddUsers",
-        count: users.length,
-        keys: users.map((user) => user.rest_id)
+          created_at: now
+        }));
+        const documents = this.buildUserSearchDocuments(extName, normalizedUsers);
+        await this.db.transaction(
+          "rw",
+          this.users(),
+          this.captures(),
+          this.searchDocuments(),
+          async () => {
+            await this.putUsers(normalizedUsers);
+            await this.bulkPutInChunks(this.captures(), captures);
+            await this.bulkPutInChunks(this.searchDocuments(), documents);
+          }
+        );
+        emitDatabaseMutation({
+          extension: extName,
+          operation: "extAddUsers",
+          count: normalizedUsers.length,
+          keys: normalizedUsers.map((user) => user.rest_id)
+        });
+        void this.publishCaptureCountSnapshot(extName);
       });
-      void this.publishCaptureCountSnapshot(extName);
     }
     async extAddCustomCaptures(extName, items) {
       if (!items.length) {
@@ -7847,14 +7894,18 @@
       if (!captures.length) {
         return;
       }
-      await this.upsertCaptures(captures);
-      emitDatabaseMutation({
-        extension: extName,
-        operation: "extAddCustomCaptures",
-        count: captures.length,
-        keys: captures.map((capture) => capture.data_key)
+      await this.enqueueWrite("extAddCustomCaptures", async () => {
+        await this.db.transaction("rw", this.captures(), async () => {
+          await this.bulkPutInChunks(this.captures(), captures);
+        });
+        emitDatabaseMutation({
+          extension: extName,
+          operation: "extAddCustomCaptures",
+          count: captures.length,
+          keys: captures.map((capture) => capture.data_key)
+        });
+        void this.publishCaptureCountSnapshot(extName);
       });
-      void this.publishCaptureCountSnapshot(extName);
     }
     async extAddSocialEdges(extName, edges) {
       const normalized = edges.map((edge) => ({
@@ -7867,12 +7918,16 @@
       if (!normalized.length) {
         return;
       }
-      await this.upsertSocialEdges(normalized);
-      emitDatabaseMutation({
-        extension: extName,
-        operation: "extAddSocialEdges",
-        count: normalized.length,
-        keys: normalized.map((edge) => edge.id)
+      await this.enqueueWrite("extAddSocialEdges", async () => {
+        await this.db.transaction("rw", this.socialEdges(), async () => {
+          await this.bulkPutInChunks(this.socialEdges(), normalized);
+        });
+        emitDatabaseMutation({
+          extension: extName,
+          operation: "extAddSocialEdges",
+          count: normalized.length,
+          keys: normalized.map((edge) => edge.id)
+        });
       });
     }
     async extAddTweetCaptureIds(extName, tweetIds, mutateExisting) {
@@ -7880,34 +7935,47 @@
       if (!ids.length) {
         return;
       }
-      await this.db.transaction("rw", this.tweets(), this.captures(), this.searchDocuments(), async () => {
-        let existingRows = [];
-        if (mutateExisting) {
-          existingRows = await this.tweets().where("rest_id").anyOf(ids).toArray();
-          if (existingRows.length) {
-            await this.tweets().bulkPut(existingRows.map((row) => mutateExisting(row)));
+      await this.enqueueWrite("extAddTweetCaptureIds", async () => {
+        await this.db.transaction(
+          "rw",
+          this.tweets(),
+          this.captures(),
+          this.searchDocuments(),
+          async () => {
+            const existingRows = [];
+            for (const chunk of chunkArray(ids, DB_WRITE_CHUNK_SIZE)) {
+              existingRows.push(...await this.tweets().where("rest_id").anyOf(chunk).toArray());
+            }
+            if (mutateExisting && existingRows.length) {
+              await this.bulkPutInChunks(
+                this.tweets(),
+                existingRows.map((row) => mutateExisting(row))
+              );
+            }
+            await this.bulkPutInChunks(
+              this.captures(),
+              ids.map((tweetId) => ({
+                id: `${extName}-${tweetId}`,
+                extension: extName,
+                type: ExtensionType.TWEET,
+                data_key: tweetId,
+                created_at: Date.now()
+              }))
+            );
+            await this.bulkPutInChunks(
+              this.searchDocuments(),
+              this.buildTweetSearchDocuments(extName, existingRows)
+            );
+            emitDatabaseMutation({
+              extension: extName,
+              operation: "extAddTweetCaptureIds",
+              count: ids.length,
+              keys: ids
+            });
+            void this.publishCaptureCountSnapshot(extName);
           }
-        } else {
-          existingRows = await this.tweets().where("rest_id").anyOf(ids).toArray();
-        }
-        await this.captures().bulkPut(
-          ids.map((tweetId) => ({
-            id: `${extName}-${tweetId}`,
-            extension: extName,
-            type: ExtensionType.TWEET,
-            data_key: tweetId,
-            created_at: Date.now()
-          }))
         );
-        await this.searchDocuments().bulkPut(this.buildTweetSearchDocuments(extName, existingRows));
-      }).catch(this.logError);
-      emitDatabaseMutation({
-        extension: extName,
-        operation: "extAddTweetCaptureIds",
-        count: ids.length,
-        keys: ids
       });
-      void this.publishCaptureCountSnapshot(extName);
     }
     async extBackfillTweetCapturesFromAllTweets(extName) {
       const existingCount = await this.extGetCaptureCount(extName);
@@ -8285,12 +8353,12 @@
       try {
         const dbName = this.db.name;
         const globalObject = globalThis;
-        globalObject[ACTIVE_DB_NAME_KEY$1] = dbName;
+        globalObject[ACTIVE_DB_NAME_KEY$2] = dbName;
         if (typeof window !== "undefined") {
-          window[ACTIVE_DB_NAME_KEY$1] = dbName;
+          window[ACTIVE_DB_NAME_KEY$2] = dbName;
         }
         if (typeof localStorage !== "undefined") {
-          localStorage.setItem(ACTIVE_DB_NAME_KEY$1, dbName);
+          localStorage.setItem(ACTIVE_DB_NAME_KEY$2, dbName);
         }
       } catch {
       }
@@ -8453,9 +8521,10 @@
     async upsertSearchDocuments(rows) {
       if (!rows.length) return;
       const startedAt = nowMs();
-      return this.db.transaction("rw", this.searchDocuments(), () => {
-        return this.searchDocuments().bulkPut(rows).catch(this.logError);
-      }).then((result) => {
+      return this.enqueueWrite("upsertSearchDocuments", async () => {
+        const result = await this.db.transaction("rw", this.searchDocuments(), async () => {
+          await this.bulkPutInChunks(this.searchDocuments(), rows);
+        });
         recordPerfMetric({
           kind: "db",
           name: "search-documents-upsert",
@@ -8463,7 +8532,7 @@
           value: rows.length
         });
         return result;
-      }).catch(this.logError);
+      });
     }
     async extBackfillSearchDocuments(extName, type2, chunkSize = 640) {
       const startedAt = nowMs();
@@ -8516,49 +8585,93 @@
       emitDatabaseMutation({ extension: extName, operation: "searchDocumentsBackfill" });
       return { processed, documents };
     }
-    async upsertTweets(tweets) {
+    async putMergedTweets(tweets) {
       if (!tweets.length) {
         return;
       }
-      return this.db.transaction("rw", this.tweets(), async () => {
-        const ids = tweets.map((tweet) => tweet.rest_id);
-        const existingRows = await this.tweets().where("rest_id").anyOf(ids).toArray();
-        const existingById = new Map(existingRows.map((row) => [String(row.rest_id), row]));
-        const data = tweets.map((tweet) => {
-          const normalized = {
-            ...tweet,
-            twe_private_fields: {
-              created_at: extractTweetCreatedAtMs(tweet),
-              updated_at: Date.now(),
-              media_count: extractTweetMedia(tweet).length
-            }
-          };
-          return mergeTweetMetadata(existingById.get(tweet.rest_id) ?? null, normalized);
+      const ids = this.normalizeDataKeys(tweets.map((tweet) => tweet.rest_id));
+      const existingRows = [];
+      for (const chunk of chunkArray(ids, DB_WRITE_CHUNK_SIZE)) {
+        existingRows.push(...await this.tweets().where("rest_id").anyOf(chunk).toArray());
+      }
+      const existingById = new Map(existingRows.map((row) => [String(row.rest_id), row]));
+      const data = tweets.map((tweet) => {
+        const normalized = {
+          ...tweet,
+          twe_private_fields: {
+            created_at: extractTweetCreatedAtMs(tweet),
+            updated_at: Date.now(),
+            media_count: extractTweetMedia(tweet).length
+          }
+        };
+        return mergeTweetMetadata(existingById.get(tweet.rest_id) ?? null, normalized);
+      });
+      await this.bulkPutInChunks(this.tweets(), data);
+    }
+    async putUsers(users) {
+      if (!users.length) {
+        return;
+      }
+      const data = users.map((user) => ({
+        ...user,
+        twe_private_fields: {
+          created_at: +parseTwitterDateTime(user.core.created_at),
+          updated_at: Date.now()
+        }
+      }));
+      await this.bulkPutInChunks(this.users(), data);
+    }
+    async bulkPutInChunks(table, rows) {
+      for (const chunk of chunkArray(rows, DB_WRITE_CHUNK_SIZE)) {
+        await table.bulkPut(chunk);
+      }
+    }
+    normalizeRowsByRestId(rows) {
+      const byId = /* @__PURE__ */ new Map();
+      for (const row of rows) {
+        const id2 = String((row == null ? void 0 : row.rest_id) || "").trim();
+        if (!id2) continue;
+        byId.set(id2, { ...row, rest_id: id2 });
+      }
+      return [...byId.values()];
+    }
+    async upsertTweets(tweets) {
+      const normalizedTweets = this.normalizeRowsByRestId(tweets);
+      if (!normalizedTweets.length) {
+        return;
+      }
+      return this.enqueueWrite("upsertTweets", async () => {
+        await this.db.transaction("rw", this.tweets(), async () => {
+          await this.putMergedTweets(normalizedTweets);
         });
-        return this.tweets().bulkPut(data);
-      }).catch(this.logError);
+      });
     }
     async upsertUsers(users) {
-      return this.db.transaction("rw", this.users(), () => {
-        const data = users.map((user) => ({
-          ...user,
-          twe_private_fields: {
-            created_at: +parseTwitterDateTime(user.core.created_at),
-            updated_at: Date.now()
-          }
-        }));
-        return this.users().bulkPut(data);
-      }).catch(this.logError);
+      const normalizedUsers = this.normalizeRowsByRestId(users);
+      if (!normalizedUsers.length) {
+        return;
+      }
+      return this.enqueueWrite("upsertUsers", async () => {
+        await this.db.transaction("rw", this.users(), async () => {
+          await this.putUsers(normalizedUsers);
+        });
+      });
     }
     async upsertCaptures(captures) {
-      return this.db.transaction("rw", this.captures(), () => {
-        return this.captures().bulkPut(captures).catch(this.logError);
-      }).catch(this.logError);
+      if (!captures.length) return;
+      return this.enqueueWrite("upsertCaptures", async () => {
+        await this.db.transaction("rw", this.captures(), async () => {
+          await this.bulkPutInChunks(this.captures(), captures);
+        });
+      });
     }
     async upsertSocialEdges(edges) {
-      return this.db.transaction("rw", this.socialEdges(), () => {
-        return this.socialEdges().bulkPut(edges).catch(this.logError);
-      }).catch(this.logError);
+      if (!edges.length) return;
+      return this.enqueueWrite("upsertSocialEdges", async () => {
+        await this.db.transaction("rw", this.socialEdges(), async () => {
+          await this.bulkPutInChunks(this.socialEdges(), edges);
+        });
+      });
     }
     async deleteAllTweets() {
       return this.tweets().clear().catch(this.logError);
@@ -8796,8 +8909,10 @@
     | Loggers
     |--------------------------------------------------------------------------
     */
-    logError(error) {
-      logger.error(`Database Error: ${error.message}`, error);
+    logError(error, operation) {
+      const message = error instanceof Error ? error.message : String(error);
+      const prefix2 = operation ? `Database Error (${operation})` : "Database Error";
+      logger.error(`${prefix2}: ${message}`, error);
     }
   }
   let databaseManager = null;
@@ -8819,6 +8934,167 @@
       return Reflect.set(manager, prop, value, receiver);
     }
   });
+  const ACTIVE_DB_NAME_KEY$1 = "__twe_active_db_name_v1";
+  const BOOKMARKS_EXTENSION_NAME$1 = "BookmarksModule";
+  const KNOWN_DB_NAME_PARTS = ["twitter-web-exporter", "scrollmark"];
+  const TABLES = [
+    "captures",
+    "tweets",
+    "users",
+    "social_edges",
+    "search_documents",
+    "imported_bundles",
+    "imported_entity_snapshots"
+  ];
+  function isKnownDatabaseName(name2) {
+    return KNOWN_DB_NAME_PARTS.some((part) => name2.includes(part));
+  }
+  function readActiveDatabaseName() {
+    const readCandidate = (source) => {
+      if (!source || typeof source !== "object") return null;
+      const value = source[ACTIVE_DB_NAME_KEY$1];
+      return typeof value === "string" && value.trim() ? value.trim() : null;
+    };
+    try {
+      const direct = readCandidate(globalThis);
+      if (direct) return direct;
+    } catch {
+    }
+    try {
+      if (typeof window !== "undefined") {
+        const direct = readCandidate(window);
+        if (direct) return direct;
+      }
+    } catch {
+    }
+    try {
+      if (typeof localStorage !== "undefined") {
+        const stored = localStorage.getItem(ACTIVE_DB_NAME_KEY$1);
+        if (stored == null ? void 0 : stored.trim()) return stored.trim();
+      }
+    } catch {
+    }
+    return null;
+  }
+  async function listKnownIndexedDbNames() {
+    if (typeof indexedDB === "undefined" || typeof indexedDB.databases !== "function") {
+      return [];
+    }
+    try {
+      const rows = await indexedDB.databases();
+      return Array.from(
+        new Set(
+          (rows || []).map((row) => row == null ? void 0 : row.name).filter((name2) => typeof name2 === "string" && isKnownDatabaseName(name2))
+        )
+      ).sort();
+    } catch {
+      return [];
+    }
+  }
+  function countRequest(req) {
+    return new Promise((resolve) => {
+      req.onsuccess = () => resolve(Number(req.result) || 0);
+      req.onerror = () => resolve(0);
+    });
+  }
+  async function readDatabaseInventory(dbName, activeDbName) {
+    return await new Promise((resolve) => {
+      const openReq = indexedDB.open(dbName);
+      openReq.onerror = () => {
+        var _a2;
+        resolve({
+          name: dbName,
+          active: dbName === activeDbName,
+          tables: {},
+          error: ((_a2 = openReq.error) == null ? void 0 : _a2.message) || "open failed"
+        });
+      };
+      openReq.onsuccess = () => {
+        const opened = openReq.result;
+        void (async () => {
+          try {
+            const existingTables = TABLES.filter((table) => opened.objectStoreNames.contains(table));
+            if (!existingTables.length) {
+              opened.close();
+              resolve({ name: dbName, active: dbName === activeDbName, tables: {} });
+              return;
+            }
+            const tables = {};
+            const tx = opened.transaction(existingTables, "readonly");
+            tx.onerror = () => {
+              var _a2;
+              opened.close();
+              resolve({
+                name: dbName,
+                active: dbName === activeDbName,
+                tables,
+                error: ((_a2 = tx.error) == null ? void 0 : _a2.message) || "transaction failed"
+              });
+            };
+            const capturesByExtension = {};
+            let bookmarkTweetCaptures;
+            const tableCounts = existingTables.map(async (table) => {
+              tables[table] = await countRequest(tx.objectStore(table).count());
+            });
+            const captureCounts = [];
+            if (existingTables.includes("captures")) {
+              const captures = tx.objectStore("captures");
+              if (captures.indexNames.contains("extension")) {
+                captureCounts.push(
+                  countRequest(captures.index("extension").count(BOOKMARKS_EXTENSION_NAME$1)).then(
+                    (count) => {
+                      capturesByExtension[BOOKMARKS_EXTENSION_NAME$1] = count;
+                    }
+                  )
+                );
+              }
+              if (captures.indexNames.contains("[extension+type]")) {
+                captureCounts.push(
+                  countRequest(
+                    captures.index("[extension+type]").count([BOOKMARKS_EXTENSION_NAME$1, "tweet"])
+                  ).then((count) => {
+                    bookmarkTweetCaptures = count;
+                  })
+                );
+              }
+            }
+            await Promise.all([...tableCounts, ...captureCounts]);
+            opened.close();
+            resolve({
+              name: dbName,
+              active: dbName === activeDbName,
+              tables,
+              captures_by_extension: Object.keys(capturesByExtension).length ? capturesByExtension : void 0,
+              bookmark_tweet_captures: bookmarkTweetCaptures
+            });
+          } catch (error) {
+            opened.close();
+            resolve({
+              name: dbName,
+              active: dbName === activeDbName,
+              tables: {},
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+        })();
+      };
+    });
+  }
+  async function collectIndexedDbInventory() {
+    const activeDbName = readActiveDatabaseName();
+    const names = await listKnownIndexedDbNames();
+    if (activeDbName && isKnownDatabaseName(activeDbName) && !names.includes(activeDbName)) {
+      names.push(activeDbName);
+      names.sort();
+    }
+    if (typeof indexedDB === "undefined") {
+      return { active_db_name: activeDbName, databases: [] };
+    }
+    return {
+      active_db_name: activeDbName,
+      databases: await Promise.all(names.map((name2) => readDatabaseInventory(name2, activeDbName)))
+    };
+  }
   function readUserscriptManagerInfo() {
     try {
       const info = globalThis.GM_info;
@@ -8892,6 +9168,7 @@
         return [];
       }
     })();
+    const indexedDbInventory = await collectIndexedDbInventory();
     const rawEventsRecent = (() => {
       try {
         const value = globals.__twe_raw_events_v1;
@@ -8939,6 +9216,7 @@
       }
     }
     const appOptionsSnapshot = {
+      dedicatedDbForAccounts: appOptionsManager.get("dedicatedDbForAccounts", false),
       directMessagesCaptureEnabled: appOptionsManager.get("directMessagesCaptureEnabled", false),
       rawCaptureEncryptedStorageReady: appOptionsManager.get("rawCaptureEncryptedStorageReady", false),
       rawCapturePolicyPublicEnabled: appOptionsManager.get("rawCapturePolicyPublicEnabled", true),
@@ -8967,6 +9245,7 @@
         logs: recentLogs.length
       },
       indexeddb_names: dbNames,
+      indexeddb_inventory: indexedDbInventory,
       local_storage: storage,
       app_options: appOptionsSnapshot,
       raw_events_full: rawEventsFull,
@@ -9583,8 +9862,9 @@
                       storageUsageText = `Storage usage: ${usageMB}MB / ${quotaMB}MB`;
                     }
                     const count = await dbProxy.count();
+                    const inventory = await collectIndexedDbInventory();
                     alert(
-                      storageUsageText + "\n\nIndexedDB tables count:\n" + JSON.stringify(count, void 0, "  ")
+                      storageUsageText + "\n\nIndexedDB tables count:\n" + JSON.stringify(count, void 0, "  ") + "\n\nScrollmark database inventory:\n" + JSON.stringify(inventory, void 0, "  ")
                     );
                   },
                   children: [
@@ -11143,7 +11423,7 @@
     }));
     return tableRef.current;
   }
-  const jsContent$1 = '(function() {\n  "use strict";\n  const version = "1.0.0";\n  var packageJson = {\n    version\n  };\n  const FALLBACK_HASH_MOD = 4294967296;\n  function fallbackHash(value) {\n    let hash = 2166136261;\n    for (let index = 0; index < value.length; index += 1) {\n      hash ^= value.charCodeAt(index);\n      hash = Math.imul(hash, 16777619) >>> 0;\n    }\n    return hash.toString(16).padStart(8, "0");\n  }\n  async function sha256Hex(value) {\n    var _a2;\n    const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;\n    if ((_a2 = globalThis.crypto) == null ? void 0 : _a2.subtle) {\n      const digestInput = bytes.buffer.slice(\n        bytes.byteOffset,\n        bytes.byteOffset + bytes.byteLength\n      );\n      const digest = await globalThis.crypto.subtle.digest("SHA-256", digestInput);\n      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");\n    }\n    let accumulator = "";\n    for (let offset = 0; offset < bytes.length; offset += 4096) {\n      accumulator += fallbackHash(String.fromCharCode(...bytes.slice(offset, offset + 4096)));\n    }\n    return fallbackHash(`${bytes.length}:${accumulator}:${FALLBACK_HASH_MOD}`);\n  }\n  async function createBundleId(seed) {\n    return `bundle_${(await sha256Hex(seed)).slice(0, 24)}`;\n  }\n  async function createBundleRecordId(bundleId, kind, sourceId) {\n    return `record_${(await sha256Hex(`${bundleId}:${kind}:${sourceId}`)).slice(0, 32)}`;\n  }\n  const SAFE_SHARED_DEFAULT_PRIVACY = {\n    includeViewerAccountId: false,\n    includeSourceCaptureTimes: false,\n    includeRawGraphQL: false,\n    includePrivateNotes: false,\n    includeMediaBlobs: false,\n    visibility: "shared_safe"\n  };\n  function buildBundlePrivacySummary(options) {\n    return {\n      visibility: options.visibility,\n      includesViewerAccountId: options.includeViewerAccountId,\n      includesSourceCaptureTimes: options.includeSourceCaptureTimes,\n      includesRawGraphQL: options.includeRawGraphQL,\n      includesPrivateNotes: options.includePrivateNotes,\n      includesMediaBlobs: options.includeMediaBlobs,\n      warnings: describeBundlePrivacyWarnings(options)\n    };\n  }\n  function describeBundlePrivacyWarnings(options) {\n    const warnings = [];\n    if (options.includeViewerAccountId) warnings.push("Includes the exporting account identifier.");\n    if (options.includeSourceCaptureTimes) warnings.push("Includes local capture/import timestamps.");\n    if (options.includeRawGraphQL)\n      warnings.push("Includes raw API payloads that may contain unrelated account context.");\n    if (options.includePrivateNotes) warnings.push("Includes user-authored local notes or labels.");\n    if (options.includeMediaBlobs)\n      warnings.push("Includes downloaded media files, increasing size and redistribution risk.");\n    if (options.visibility === "public" && warnings.length) {\n      warnings.unshift("Public bundle includes fields that should be reviewed before sharing.");\n    }\n    return warnings;\n  }\n  var u8 = Uint8Array, u16 = Uint16Array, i32 = Int32Array;\n  var fleb = new u8([\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    1,\n    1,\n    1,\n    1,\n    2,\n    2,\n    2,\n    2,\n    3,\n    3,\n    3,\n    3,\n    4,\n    4,\n    4,\n    4,\n    5,\n    5,\n    5,\n    5,\n    0,\n    /* unused */\n    0,\n    0,\n    /* impossible */\n    0\n  ]);\n  var fdeb = new u8([\n    0,\n    0,\n    0,\n    0,\n    1,\n    1,\n    2,\n    2,\n    3,\n    3,\n    4,\n    4,\n    5,\n    5,\n    6,\n    6,\n    7,\n    7,\n    8,\n    8,\n    9,\n    9,\n    10,\n    10,\n    11,\n    11,\n    12,\n    12,\n    13,\n    13,\n    /* unused */\n    0,\n    0\n  ]);\n  var clim = new u8([16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]);\n  var freb = function(eb, start) {\n    var b = new u16(31);\n    for (var i2 = 0; i2 < 31; ++i2) {\n      b[i2] = start += 1 << eb[i2 - 1];\n    }\n    var r = new i32(b[30]);\n    for (var i2 = 1; i2 < 30; ++i2) {\n      for (var j = b[i2]; j < b[i2 + 1]; ++j) {\n        r[j] = j - b[i2] << 5 | i2;\n      }\n    }\n    return { b, r };\n  };\n  var _a = freb(fleb, 2), fl = _a.b, revfl = _a.r;\n  fl[28] = 258, revfl[258] = 28;\n  var _b = freb(fdeb, 0), revfd = _b.r;\n  var rev = new u16(32768);\n  for (var i = 0; i < 32768; ++i) {\n    var x = (i & 43690) >> 1 | (i & 21845) << 1;\n    x = (x & 52428) >> 2 | (x & 13107) << 2;\n    x = (x & 61680) >> 4 | (x & 3855) << 4;\n    rev[i] = ((x & 65280) >> 8 | (x & 255) << 8) >> 1;\n  }\n  var hMap = (function(cd, mb, r) {\n    var s = cd.length;\n    var i2 = 0;\n    var l = new u16(mb);\n    for (; i2 < s; ++i2) {\n      if (cd[i2])\n        ++l[cd[i2] - 1];\n    }\n    var le = new u16(mb);\n    for (i2 = 1; i2 < mb; ++i2) {\n      le[i2] = le[i2 - 1] + l[i2 - 1] << 1;\n    }\n    var co;\n    if (r) {\n      co = new u16(1 << mb);\n      var rvb = 15 - mb;\n      for (i2 = 0; i2 < s; ++i2) {\n        if (cd[i2]) {\n          var sv = i2 << 4 | cd[i2];\n          var r_1 = mb - cd[i2];\n          var v = le[cd[i2] - 1]++ << r_1;\n          for (var m = v | (1 << r_1) - 1; v <= m; ++v) {\n            co[rev[v] >> rvb] = sv;\n          }\n        }\n      }\n    } else {\n      co = new u16(s);\n      for (i2 = 0; i2 < s; ++i2) {\n        if (cd[i2]) {\n          co[i2] = rev[le[cd[i2] - 1]++] >> 15 - cd[i2];\n        }\n      }\n    }\n    return co;\n  });\n  var flt = new u8(288);\n  for (var i = 0; i < 144; ++i)\n    flt[i] = 8;\n  for (var i = 144; i < 256; ++i)\n    flt[i] = 9;\n  for (var i = 256; i < 280; ++i)\n    flt[i] = 7;\n  for (var i = 280; i < 288; ++i)\n    flt[i] = 8;\n  var fdt = new u8(32);\n  for (var i = 0; i < 32; ++i)\n    fdt[i] = 5;\n  var flm = /* @__PURE__ */ hMap(flt, 9, 0);\n  var fdm = /* @__PURE__ */ hMap(fdt, 5, 0);\n  var shft = function(p) {\n    return (p + 7) / 8 | 0;\n  };\n  var slc = function(v, s, e) {\n    if (e == null || e > v.length)\n      e = v.length;\n    return new u8(v.subarray(s, e));\n  };\n  var ec = [\n    "unexpected EOF",\n    "invalid block type",\n    "invalid length/literal",\n    "invalid distance",\n    "stream finished",\n    "no stream handler",\n    ,\n    "no callback",\n    "invalid UTF-8 data",\n    "extra field too long",\n    "date not in range 1980-2099",\n    "filename too long",\n    "stream finishing",\n    "invalid zip data"\n    // determined by unknown compression method\n  ];\n  var err = function(ind, msg, nt) {\n    var e = new Error(msg || ec[ind]);\n    e.code = ind;\n    if (Error.captureStackTrace)\n      Error.captureStackTrace(e, err);\n    if (!nt)\n      throw e;\n    return e;\n  };\n  var wbits = function(d, p, v) {\n    v <<= p & 7;\n    var o = p / 8 | 0;\n    d[o] |= v;\n    d[o + 1] |= v >> 8;\n  };\n  var wbits16 = function(d, p, v) {\n    v <<= p & 7;\n    var o = p / 8 | 0;\n    d[o] |= v;\n    d[o + 1] |= v >> 8;\n    d[o + 2] |= v >> 16;\n  };\n  var hTree = function(d, mb) {\n    var t = [];\n    for (var i2 = 0; i2 < d.length; ++i2) {\n      if (d[i2])\n        t.push({ s: i2, f: d[i2] });\n    }\n    var s = t.length;\n    var t2 = t.slice();\n    if (!s)\n      return { t: et, l: 0 };\n    if (s == 1) {\n      var v = new u8(t[0].s + 1);\n      v[t[0].s] = 1;\n      return { t: v, l: 1 };\n    }\n    t.sort(function(a, b) {\n      return a.f - b.f;\n    });\n    t.push({ s: -1, f: 25001 });\n    var l = t[0], r = t[1], i0 = 0, i1 = 1, i22 = 2;\n    t[0] = { s: -1, f: l.f + r.f, l, r };\n    while (i1 != s - 1) {\n      l = t[t[i0].f < t[i22].f ? i0++ : i22++];\n      r = t[i0 != i1 && t[i0].f < t[i22].f ? i0++ : i22++];\n      t[i1++] = { s: -1, f: l.f + r.f, l, r };\n    }\n    var maxSym = t2[0].s;\n    for (var i2 = 1; i2 < s; ++i2) {\n      if (t2[i2].s > maxSym)\n        maxSym = t2[i2].s;\n    }\n    var tr = new u16(maxSym + 1);\n    var mbt = ln(t[i1 - 1], tr, 0);\n    if (mbt > mb) {\n      var i2 = 0, dt = 0;\n      var lft = mbt - mb, cst = 1 << lft;\n      t2.sort(function(a, b) {\n        return tr[b.s] - tr[a.s] || a.f - b.f;\n      });\n      for (; i2 < s; ++i2) {\n        var i2_1 = t2[i2].s;\n        if (tr[i2_1] > mb) {\n          dt += cst - (1 << mbt - tr[i2_1]);\n          tr[i2_1] = mb;\n        } else\n          break;\n      }\n      dt >>= lft;\n      while (dt > 0) {\n        var i2_2 = t2[i2].s;\n        if (tr[i2_2] < mb)\n          dt -= 1 << mb - tr[i2_2]++ - 1;\n        else\n          ++i2;\n      }\n      for (; i2 >= 0 && dt; --i2) {\n        var i2_3 = t2[i2].s;\n        if (tr[i2_3] == mb) {\n          --tr[i2_3];\n          ++dt;\n        }\n      }\n      mbt = mb;\n    }\n    return { t: new u8(tr), l: mbt };\n  };\n  var ln = function(n, l, d) {\n    return n.s == -1 ? Math.max(ln(n.l, l, d + 1), ln(n.r, l, d + 1)) : l[n.s] = d;\n  };\n  var lc = function(c) {\n    var s = c.length;\n    while (s && !c[--s])\n      ;\n    var cl = new u16(++s);\n    var cli = 0, cln = c[0], cls = 1;\n    var w = function(v) {\n      cl[cli++] = v;\n    };\n    for (var i2 = 1; i2 <= s; ++i2) {\n      if (c[i2] == cln && i2 != s)\n        ++cls;\n      else {\n        if (!cln && cls > 2) {\n          for (; cls > 138; cls -= 138)\n            w(32754);\n          if (cls > 2) {\n            w(cls > 10 ? cls - 11 << 5 | 28690 : cls - 3 << 5 | 12305);\n            cls = 0;\n          }\n        } else if (cls > 3) {\n          w(cln), --cls;\n          for (; cls > 6; cls -= 6)\n            w(8304);\n          if (cls > 2)\n            w(cls - 3 << 5 | 8208), cls = 0;\n        }\n        while (cls--)\n          w(cln);\n        cls = 1;\n        cln = c[i2];\n      }\n    }\n    return { c: cl.subarray(0, cli), n: s };\n  };\n  var clen = function(cf, cl) {\n    var l = 0;\n    for (var i2 = 0; i2 < cl.length; ++i2)\n      l += cf[i2] * cl[i2];\n    return l;\n  };\n  var wfblk = function(out, pos, dat) {\n    var s = dat.length;\n    var o = shft(pos + 2);\n    out[o] = s & 255;\n    out[o + 1] = s >> 8;\n    out[o + 2] = out[o] ^ 255;\n    out[o + 3] = out[o + 1] ^ 255;\n    for (var i2 = 0; i2 < s; ++i2)\n      out[o + i2 + 4] = dat[i2];\n    return (o + 4 + s) * 8;\n  };\n  var wblk = function(dat, out, final, syms, lf, df, eb, li, bs, bl, p) {\n    wbits(out, p++, final);\n    ++lf[256];\n    var _a2 = hTree(lf, 15), dlt = _a2.t, mlb = _a2.l;\n    var _b2 = hTree(df, 15), ddt = _b2.t, mdb = _b2.l;\n    var _c = lc(dlt), lclt = _c.c, nlc = _c.n;\n    var _d = lc(ddt), lcdt = _d.c, ndc = _d.n;\n    var lcfreq = new u16(19);\n    for (var i2 = 0; i2 < lclt.length; ++i2)\n      ++lcfreq[lclt[i2] & 31];\n    for (var i2 = 0; i2 < lcdt.length; ++i2)\n      ++lcfreq[lcdt[i2] & 31];\n    var _e = hTree(lcfreq, 7), lct = _e.t, mlcb = _e.l;\n    var nlcc = 19;\n    for (; nlcc > 4 && !lct[clim[nlcc - 1]]; --nlcc)\n      ;\n    var flen = bl + 5 << 3;\n    var ftlen = clen(lf, flt) + clen(df, fdt) + eb;\n    var dtlen = clen(lf, dlt) + clen(df, ddt) + eb + 14 + 3 * nlcc + clen(lcfreq, lct) + 2 * lcfreq[16] + 3 * lcfreq[17] + 7 * lcfreq[18];\n    if (bs >= 0 && flen <= ftlen && flen <= dtlen)\n      return wfblk(out, p, dat.subarray(bs, bs + bl));\n    var lm, ll, dm, dl;\n    wbits(out, p, 1 + (dtlen < ftlen)), p += 2;\n    if (dtlen < ftlen) {\n      lm = hMap(dlt, mlb, 0), ll = dlt, dm = hMap(ddt, mdb, 0), dl = ddt;\n      var llm = hMap(lct, mlcb, 0);\n      wbits(out, p, nlc - 257);\n      wbits(out, p + 5, ndc - 1);\n      wbits(out, p + 10, nlcc - 4);\n      p += 14;\n      for (var i2 = 0; i2 < nlcc; ++i2)\n        wbits(out, p + 3 * i2, lct[clim[i2]]);\n      p += 3 * nlcc;\n      var lcts = [lclt, lcdt];\n      for (var it = 0; it < 2; ++it) {\n        var clct = lcts[it];\n        for (var i2 = 0; i2 < clct.length; ++i2) {\n          var len = clct[i2] & 31;\n          wbits(out, p, llm[len]), p += lct[len];\n          if (len > 15)\n            wbits(out, p, clct[i2] >> 5 & 127), p += clct[i2] >> 12;\n        }\n      }\n    } else {\n      lm = flm, ll = flt, dm = fdm, dl = fdt;\n    }\n    for (var i2 = 0; i2 < li; ++i2) {\n      var sym = syms[i2];\n      if (sym > 255) {\n        var len = sym >> 18 & 31;\n        wbits16(out, p, lm[len + 257]), p += ll[len + 257];\n        if (len > 7)\n          wbits(out, p, sym >> 23 & 31), p += fleb[len];\n        var dst = sym & 31;\n        wbits16(out, p, dm[dst]), p += dl[dst];\n        if (dst > 3)\n          wbits16(out, p, sym >> 5 & 8191), p += fdeb[dst];\n      } else {\n        wbits16(out, p, lm[sym]), p += ll[sym];\n      }\n    }\n    wbits16(out, p, lm[256]);\n    return p + ll[256];\n  };\n  var deo = /* @__PURE__ */ new i32([65540, 131080, 131088, 131104, 262176, 1048704, 1048832, 2114560, 2117632]);\n  var et = /* @__PURE__ */ new u8(0);\n  var dflt = function(dat, lvl, plvl, pre, post2, st) {\n    var s = st.z || dat.length;\n    var o = new u8(pre + s + 5 * (1 + Math.ceil(s / 7e3)) + post2);\n    var w = o.subarray(pre, o.length - post2);\n    var lst = st.l;\n    var pos = (st.r || 0) & 7;\n    if (lvl) {\n      if (pos)\n        w[0] = st.r >> 3;\n      var opt = deo[lvl - 1];\n      var n = opt >> 13, c = opt & 8191;\n      var msk_1 = (1 << plvl) - 1;\n      var prev = st.p || new u16(32768), head = st.h || new u16(msk_1 + 1);\n      var bs1_1 = Math.ceil(plvl / 3), bs2_1 = 2 * bs1_1;\n      var hsh = function(i3) {\n        return (dat[i3] ^ dat[i3 + 1] << bs1_1 ^ dat[i3 + 2] << bs2_1) & msk_1;\n      };\n      var syms = new i32(25e3);\n      var lf = new u16(288), df = new u16(32);\n      var lc_1 = 0, eb = 0, i2 = st.i || 0, li = 0, wi = st.w || 0, bs = 0;\n      for (; i2 + 2 < s; ++i2) {\n        var hv = hsh(i2);\n        var imod = i2 & 32767, pimod = head[hv];\n        prev[imod] = pimod;\n        head[hv] = imod;\n        if (wi <= i2) {\n          var rem = s - i2;\n          if ((lc_1 > 7e3 || li > 24576) && (rem > 423 || !lst)) {\n            pos = wblk(dat, w, 0, syms, lf, df, eb, li, bs, i2 - bs, pos);\n            li = lc_1 = eb = 0, bs = i2;\n            for (var j = 0; j < 286; ++j)\n              lf[j] = 0;\n            for (var j = 0; j < 30; ++j)\n              df[j] = 0;\n          }\n          var l = 2, d = 0, ch_1 = c, dif = imod - pimod & 32767;\n          if (rem > 2 && hv == hsh(i2 - dif)) {\n            var maxn = Math.min(n, rem) - 1;\n            var maxd = Math.min(32767, i2);\n            var ml = Math.min(258, rem);\n            while (dif <= maxd && --ch_1 && imod != pimod) {\n              if (dat[i2 + l] == dat[i2 + l - dif]) {\n                var nl = 0;\n                for (; nl < ml && dat[i2 + nl] == dat[i2 + nl - dif]; ++nl)\n                  ;\n                if (nl > l) {\n                  l = nl, d = dif;\n                  if (nl > maxn)\n                    break;\n                  var mmd = Math.min(dif, nl - 2);\n                  var md = 0;\n                  for (var j = 0; j < mmd; ++j) {\n                    var ti = i2 - dif + j & 32767;\n                    var pti = prev[ti];\n                    var cd = ti - pti & 32767;\n                    if (cd > md)\n                      md = cd, pimod = ti;\n                  }\n                }\n              }\n              imod = pimod, pimod = prev[imod];\n              dif += imod - pimod & 32767;\n            }\n          }\n          if (d) {\n            syms[li++] = 268435456 | revfl[l] << 18 | revfd[d];\n            var lin = revfl[l] & 31, din = revfd[d] & 31;\n            eb += fleb[lin] + fdeb[din];\n            ++lf[257 + lin];\n            ++df[din];\n            wi = i2 + l;\n            ++lc_1;\n          } else {\n            syms[li++] = dat[i2];\n            ++lf[dat[i2]];\n          }\n        }\n      }\n      for (i2 = Math.max(i2, wi); i2 < s; ++i2) {\n        syms[li++] = dat[i2];\n        ++lf[dat[i2]];\n      }\n      pos = wblk(dat, w, lst, syms, lf, df, eb, li, bs, i2 - bs, pos);\n      if (!lst) {\n        st.r = pos & 7 | w[pos / 8 | 0] << 3;\n        pos -= 7;\n        st.h = head, st.p = prev, st.i = i2, st.w = wi;\n      }\n    } else {\n      for (var i2 = st.w || 0; i2 < s + lst; i2 += 65535) {\n        var e = i2 + 65535;\n        if (e >= s) {\n          w[pos / 8 | 0] = lst;\n          e = s;\n        }\n        pos = wfblk(w, pos + 1, dat.subarray(i2, e));\n      }\n      st.i = s;\n    }\n    return slc(o, 0, pre + shft(pos) + post2);\n  };\n  var crct = /* @__PURE__ */ (function() {\n    var t = new Int32Array(256);\n    for (var i2 = 0; i2 < 256; ++i2) {\n      var c = i2, k = 9;\n      while (--k)\n        c = (c & 1 && -306674912) ^ c >>> 1;\n      t[i2] = c;\n    }\n    return t;\n  })();\n  var crc = function() {\n    var c = -1;\n    return {\n      p: function(d) {\n        var cr = c;\n        for (var i2 = 0; i2 < d.length; ++i2)\n          cr = crct[cr & 255 ^ d[i2]] ^ cr >>> 8;\n        c = cr;\n      },\n      d: function() {\n        return ~c;\n      }\n    };\n  };\n  var dopt = function(dat, opt, pre, post2, st) {\n    if (!st) {\n      st = { l: 1 };\n      if (opt.dictionary) {\n        var dict = opt.dictionary.subarray(-32768);\n        var newDat = new u8(dict.length + dat.length);\n        newDat.set(dict);\n        newDat.set(dat, dict.length);\n        dat = newDat;\n        st.w = dict.length;\n      }\n    }\n    return dflt(dat, opt.level == null ? 6 : opt.level, opt.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt.mem, pre, post2, st);\n  };\n  var mrg = function(a, b) {\n    var o = {};\n    for (var k in a)\n      o[k] = a[k];\n    for (var k in b)\n      o[k] = b[k];\n    return o;\n  };\n  var wbytes = function(d, b, v) {\n    for (; v; ++b)\n      d[b] = v, v >>>= 8;\n  };\n  function deflateSync(data, opts) {\n    return dopt(data, opts || {}, 0, 0);\n  }\n  var fltn = function(d, p, t, o) {\n    for (var k in d) {\n      var val = d[k], n = p + k, op = o;\n      if (Array.isArray(val))\n        op = mrg(o, val[1]), val = val[0];\n      if (val instanceof u8)\n        t[n] = [val, op];\n      else {\n        t[n += "/"] = [new u8(0), op];\n        fltn(val, n, t, o);\n      }\n    }\n  };\n  var te = typeof TextEncoder != "undefined" && /* @__PURE__ */ new TextEncoder();\n  var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();\n  var tds = 0;\n  try {\n    td.decode(et, { stream: true });\n    tds = 1;\n  } catch (e) {\n  }\n  function strToU8(str, latin1) {\n    var i2;\n    if (te)\n      return te.encode(str);\n    var l = str.length;\n    var ar = new u8(str.length + (str.length >> 1));\n    var ai = 0;\n    var w = function(v) {\n      ar[ai++] = v;\n    };\n    for (var i2 = 0; i2 < l; ++i2) {\n      if (ai + 5 > ar.length) {\n        var n = new u8(ai + 8 + (l - i2 << 1));\n        n.set(ar);\n        ar = n;\n      }\n      var c = str.charCodeAt(i2);\n      if (c < 128 || latin1)\n        w(c);\n      else if (c < 2048)\n        w(192 | c >> 6), w(128 | c & 63);\n      else if (c > 55295 && c < 57344)\n        c = 65536 + (c & 1023 << 10) | str.charCodeAt(++i2) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);\n      else\n        w(224 | c >> 12), w(128 | c >> 6 & 63), w(128 | c & 63);\n    }\n    return slc(ar, 0, ai);\n  }\n  var exfl = function(ex) {\n    var le = 0;\n    if (ex) {\n      for (var k in ex) {\n        var l = ex[k].length;\n        if (l > 65535)\n          err(9);\n        le += l + 4;\n      }\n    }\n    return le;\n  };\n  var wzh = function(d, b, f, fn, u, c, ce, co) {\n    var fl2 = fn.length, ex = f.extra, col = co && co.length;\n    var exl = exfl(ex);\n    wbytes(d, b, ce != null ? 33639248 : 67324752), b += 4;\n    if (ce != null)\n      d[b++] = 20, d[b++] = f.os;\n    d[b] = 20, b += 2;\n    d[b++] = f.flag << 1 | (c < 0 && 8), d[b++] = u && 8;\n    d[b++] = f.compression & 255, d[b++] = f.compression >> 8;\n    var dt = new Date(f.mtime == null ? Date.now() : f.mtime), y = dt.getFullYear() - 1980;\n    if (y < 0 || y > 119)\n      err(10);\n    wbytes(d, b, y << 25 | dt.getMonth() + 1 << 21 | dt.getDate() << 16 | dt.getHours() << 11 | dt.getMinutes() << 5 | dt.getSeconds() >> 1), b += 4;\n    if (c != -1) {\n      wbytes(d, b, f.crc);\n      wbytes(d, b + 4, c < 0 ? -c - 2 : c);\n      wbytes(d, b + 8, f.size);\n    }\n    wbytes(d, b + 12, fl2);\n    wbytes(d, b + 14, exl), b += 16;\n    if (ce != null) {\n      wbytes(d, b, col);\n      wbytes(d, b + 6, f.attrs);\n      wbytes(d, b + 10, ce), b += 14;\n    }\n    d.set(fn, b);\n    b += fl2;\n    if (exl) {\n      for (var k in ex) {\n        var exf = ex[k], l = exf.length;\n        wbytes(d, b, +k);\n        wbytes(d, b + 2, l);\n        d.set(exf, b + 4), b += 4 + l;\n      }\n    }\n    if (col)\n      d.set(co, b), b += col;\n    return b;\n  };\n  var wzf = function(o, b, c, d, e) {\n    wbytes(o, b, 101010256);\n    wbytes(o, b + 8, c);\n    wbytes(o, b + 10, c);\n    wbytes(o, b + 12, d);\n    wbytes(o, b + 16, e);\n  };\n  function zipSync(data, opts) {\n    if (!opts)\n      opts = {};\n    var r = {};\n    var files = [];\n    fltn(data, "", r, opts);\n    var o = 0;\n    var tot = 0;\n    for (var fn in r) {\n      var _a2 = r[fn], file = _a2[0], p = _a2[1];\n      var compression = p.level == 0 ? 0 : 8;\n      var f = strToU8(fn), s = f.length;\n      var com = p.comment, m = com && strToU8(com), ms = m && m.length;\n      var exl = exfl(p.extra);\n      if (s > 65535)\n        err(11);\n      var d = compression ? deflateSync(file, p) : file, l = d.length;\n      var c = crc();\n      c.p(file);\n      files.push(mrg(p, {\n        size: file.length,\n        crc: c.d(),\n        c: d,\n        f,\n        m,\n        u: s != fn.length || m && com.length != ms,\n        o,\n        compression\n      }));\n      o += 30 + s + exl + l;\n      tot += 76 + 2 * (s + exl) + (ms || 0) + l;\n    }\n    var out = new u8(tot + 22), oe = o, cdl = tot - o;\n    for (var i2 = 0; i2 < files.length; ++i2) {\n      var f = files[i2];\n      wzh(out, f.o, f, f.f, f.u, f.c.length);\n      var badd = 30 + f.f.length + exfl(f.extra);\n      out.set(f.c, f.o + badd);\n      wzh(out, o, f, f.f, f.u, f.c.length, f.o, f.m), o += 16 + badd + (f.m ? f.m.length : 0);\n    }\n    wzf(out, o, files.length, cdl, oe);\n    return out;\n  }\n  function validateBundleZipPath(path) {\n    const normalized = path.replace(/\\\\/g, "/").replace(/^\\/+/, "");\n    if (!normalized || normalized.includes("..") || normalized.startsWith("/")) {\n      throw new Error(`Unsafe bundle ZIP path: ${path}`);\n    }\n    return normalized;\n  }\n  function createBundleZip(entries) {\n    const payload = {};\n    for (const entry of entries) {\n      const path = validateBundleZipPath(entry.path);\n      const options = { level: entry.level ?? 6 };\n      payload[path] = [typeof entry.data === "string" ? strToU8(entry.data) : entry.data, options];\n    }\n    return zipSync(payload);\n  }\n  function normalizeFilename(value) {\n    return String(value || "bundle").trim().replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "bundle";\n  }\n  function safeHttpUrl(value) {\n    if (typeof value !== "string") return void 0;\n    try {\n      const parsed = new URL(value);\n      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : void 0;\n    } catch {\n      return void 0;\n    }\n  }\n  function inferKind(original, record) {\n    const source = original && typeof original === "object" ? original : {};\n    const typename = String(source.__typename || record.__typename || "").toLowerCase();\n    if (typename.includes("tweet") || record.full_text || record.media) return "tweet";\n    if (typename.includes("user") || record.screen_name || record.profile_image_url) return "user";\n    return "unknown";\n  }\n  function extractObservedAt(original, record) {\n    const source = original && typeof original === "object" ? original : {};\n    const privateFields = source.twe_private_fields;\n    const candidates = [\n      privateFields == null ? void 0 : privateFields.created_at,\n      privateFields == null ? void 0 : privateFields.updated_at,\n      record.created_at,\n      record.time,\n      record.date\n    ];\n    for (const candidate of candidates) {\n      const numeric = Number(candidate);\n      if (Number.isFinite(numeric) && numeric > 0) {\n        return numeric;\n      }\n      if (typeof candidate === "string") {\n        const parsed = Date.parse(candidate);\n        if (Number.isFinite(parsed)) {\n          return parsed;\n        }\n      }\n    }\n    return void 0;\n  }\n  async function buildRecordEnvelope(bundleId, row, options) {\n    const kind = inferKind(row.original, row.record);\n    const sourceId = String(row.id || row.record.id || row.record.rest_id || "");\n    const id = await createBundleRecordId(bundleId, kind, sourceId || JSON.stringify(row.record));\n    const data = options.includeOriginalMetadata ? {\n      ...row.record,\n      metadata: row.original\n    } : row.record;\n    return {\n      id,\n      kind,\n      sourceId: sourceId || void 0,\n      observedAt: extractObservedAt(row.original, row.record),\n      sensitivity: "low",\n      data,\n      mediaRefs: Array.isArray(row.record.media) ? row.record.media.map((media, index) => ({\n        id: `${id}:media:${index}`,\n        type: media.type === "photo" || media.type === "video" || media.type === "animated_gif" ? media.type : "unknown",\n        url: safeHttpUrl(media.original),\n        previewUrl: safeHttpUrl(media.thumbnail),\n        altText: typeof media.ext_alt_text === "string" ? media.ext_alt_text : void 0\n      })) : void 0\n    };\n  }\n  function countBundleRecords(records) {\n    return records.reduce(\n      (acc, record) => {\n        acc.records += 1;\n        if (record.kind === "tweet") acc.tweets += 1;\n        if (record.kind === "user") acc.users += 1;\n        if (record.kind === "social_edge") acc.socialEdges += 1;\n        if (record.kind === "capture") acc.captures += 1;\n        acc.mediaBlobs += 0;\n        return acc;\n      },\n      { records: 0, tweets: 0, users: 0, socialEdges: 0, captures: 0, mediaBlobs: 0 }\n    );\n  }\n  async function createCanonicalBundleZip(rows, options) {\n    const now = Date.now();\n    const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();\n    const reportProgress = (phase, processedRecords) => {\n      var _a2;\n      (_a2 = options.onProgress) == null ? void 0 : _a2.call(options, {\n        phase,\n        processedRecords,\n        totalRecords: rows.length,\n        elapsedMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt\n      });\n    };\n    const bundleId = await createBundleId(\n      `${options.title}:${options.scope}:${options.queryText || ""}:${now}:${rows.length}`\n    );\n    const records = [];\n    for (let index = 0; index < rows.length; index += 1) {\n      const row = rows[index];\n      if (!row) continue;\n      records.push(await buildRecordEnvelope(bundleId, row, options));\n      if (index === 0 || index + 1 === rows.length || (index + 1) % 100 === 0) {\n        reportProgress("envelope", index + 1);\n      }\n    }\n    const recordsJsonl = records.map((record) => JSON.stringify(record)).join("\\n") + "\\n";\n    const privacy = buildBundlePrivacySummary(SAFE_SHARED_DEFAULT_PRIVACY);\n    const files = [\n      {\n        path: "manifest.json",\n        contentType: "application/json",\n        role: "manifest"\n      },\n      {\n        path: "records/records.jsonl",\n        contentType: "application/x-ndjson",\n        role: "records",\n        bytes: new TextEncoder().encode(recordsJsonl).byteLength,\n        sha256: await sha256Hex(recordsJsonl)\n      }\n    ];\n    const mediaUrlLines = records.flatMap((record) => record.mediaRefs || []).map((media) => media.url).filter((url) => !!url);\n    const mediaUrlsText = mediaUrlLines.join("\\n") + (mediaUrlLines.length ? "\\n" : "");\n    if (mediaUrlLines.length) {\n      files.push({\n        path: "media/media-urls.txt",\n        contentType: "text/plain",\n        role: "media",\n        bytes: new TextEncoder().encode(mediaUrlsText).byteLength,\n        sha256: await sha256Hex(mediaUrlsText)\n      });\n    }\n    const manifest = {\n      id: bundleId,\n      title: options.title,\n      description: options.description,\n      producer: {\n        app: "twitter-web-exporter",\n        appVersion: packageJson.version,\n        schemaVersion: 1,\n        exportedAt: now\n      },\n      privacy,\n      counts: countBundleRecords(records),\n      files\n    };\n    const manifestFile = files[0];\n    if (manifestFile) {\n      files[0] = {\n        ...manifestFile,\n        bytes: new TextEncoder().encode(JSON.stringify(manifest, void 0, 2)).byteLength\n      };\n    }\n    reportProgress("manifest", records.length);\n    const compressionLevel = options.compressionLevel ?? 1;\n    const entries = [\n      {\n        path: "manifest.json",\n        data: JSON.stringify(manifest, void 0, 2),\n        level: compressionLevel\n      },\n      {\n        path: "records/records.jsonl",\n        data: recordsJsonl,\n        level: compressionLevel\n      }\n    ];\n    if (mediaUrlLines.length) {\n      entries.push({ path: "media/media-urls.txt", data: mediaUrlsText, level: compressionLevel });\n    }\n    reportProgress("zip", records.length);\n    const result = {\n      filename: `twe-bundle-${normalizeFilename(options.title)}-${now}.zip`,\n      bytes: createBundleZip(entries),\n      manifest\n    };\n    reportProgress("done", records.length);\n    return result;\n  }\n  const cancelledJobs = /* @__PURE__ */ new Set();\n  function nowMs() {\n    if (typeof performance !== "undefined" && typeof performance.now === "function") {\n      return performance.now();\n    }\n    return Date.now();\n  }\n  function post(message, transfer) {\n    self.postMessage(message, { transfer: transfer || [] });\n  }\n  function errorMessage(error) {\n    return error instanceof Error ? error.message : String(error);\n  }\n  self.onmessage = (event) => {\n    const request = event.data;\n    if (!request || typeof request !== "object") return;\n    if (request.type === "bundle-export:cancel") {\n      cancelledJobs.add(request.jobId);\n      return;\n    }\n    if (request.type !== "bundle-export:start") return;\n    const startedAt = nowMs();\n    void (async () => {\n      try {\n        if (cancelledJobs.has(request.jobId)) {\n          cancelledJobs.delete(request.jobId);\n          return;\n        }\n        const result = await createCanonicalBundleZip(request.rows, {\n          ...request.options,\n          onProgress: (progress) => {\n            if (cancelledJobs.has(request.jobId)) {\n              throw new Error("Bundle export cancelled.");\n            }\n            post({ type: "bundle-export:progress", jobId: request.jobId, progress });\n          }\n        });\n        if (cancelledJobs.has(request.jobId)) {\n          cancelledJobs.delete(request.jobId);\n          return;\n        }\n        const buffer = result.bytes.buffer.slice(\n          result.bytes.byteOffset,\n          result.bytes.byteOffset + result.bytes.byteLength\n        );\n        post(\n          {\n            type: "bundle-export:done",\n            jobId: request.jobId,\n            filename: result.filename,\n            buffer,\n            manifest: result.manifest,\n            elapsedMs: nowMs() - startedAt\n          },\n          [buffer]\n        );\n      } catch (error) {\n        post({\n          type: "bundle-export:error",\n          jobId: request.jobId,\n          error: errorMessage(error),\n          elapsedMs: nowMs() - startedAt\n        });\n      } finally {\n        cancelledJobs.delete(request.jobId);\n      }\n    })();\n  };\n})();\n';
+  const jsContent$1 = '(function() {\n  "use strict";\n  const version = "1.0.1";\n  var packageJson = {\n    version\n  };\n  const FALLBACK_HASH_MOD = 4294967296;\n  function fallbackHash(value) {\n    let hash = 2166136261;\n    for (let index = 0; index < value.length; index += 1) {\n      hash ^= value.charCodeAt(index);\n      hash = Math.imul(hash, 16777619) >>> 0;\n    }\n    return hash.toString(16).padStart(8, "0");\n  }\n  async function sha256Hex(value) {\n    var _a2;\n    const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;\n    if ((_a2 = globalThis.crypto) == null ? void 0 : _a2.subtle) {\n      const digestInput = bytes.buffer.slice(\n        bytes.byteOffset,\n        bytes.byteOffset + bytes.byteLength\n      );\n      const digest = await globalThis.crypto.subtle.digest("SHA-256", digestInput);\n      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");\n    }\n    let accumulator = "";\n    for (let offset = 0; offset < bytes.length; offset += 4096) {\n      accumulator += fallbackHash(String.fromCharCode(...bytes.slice(offset, offset + 4096)));\n    }\n    return fallbackHash(`${bytes.length}:${accumulator}:${FALLBACK_HASH_MOD}`);\n  }\n  async function createBundleId(seed) {\n    return `bundle_${(await sha256Hex(seed)).slice(0, 24)}`;\n  }\n  async function createBundleRecordId(bundleId, kind, sourceId) {\n    return `record_${(await sha256Hex(`${bundleId}:${kind}:${sourceId}`)).slice(0, 32)}`;\n  }\n  const SAFE_SHARED_DEFAULT_PRIVACY = {\n    includeViewerAccountId: false,\n    includeSourceCaptureTimes: false,\n    includeRawGraphQL: false,\n    includePrivateNotes: false,\n    includeMediaBlobs: false,\n    visibility: "shared_safe"\n  };\n  function buildBundlePrivacySummary(options) {\n    return {\n      visibility: options.visibility,\n      includesViewerAccountId: options.includeViewerAccountId,\n      includesSourceCaptureTimes: options.includeSourceCaptureTimes,\n      includesRawGraphQL: options.includeRawGraphQL,\n      includesPrivateNotes: options.includePrivateNotes,\n      includesMediaBlobs: options.includeMediaBlobs,\n      warnings: describeBundlePrivacyWarnings(options)\n    };\n  }\n  function describeBundlePrivacyWarnings(options) {\n    const warnings = [];\n    if (options.includeViewerAccountId) warnings.push("Includes the exporting account identifier.");\n    if (options.includeSourceCaptureTimes) warnings.push("Includes local capture/import timestamps.");\n    if (options.includeRawGraphQL)\n      warnings.push("Includes raw API payloads that may contain unrelated account context.");\n    if (options.includePrivateNotes) warnings.push("Includes user-authored local notes or labels.");\n    if (options.includeMediaBlobs)\n      warnings.push("Includes downloaded media files, increasing size and redistribution risk.");\n    if (options.visibility === "public" && warnings.length) {\n      warnings.unshift("Public bundle includes fields that should be reviewed before sharing.");\n    }\n    return warnings;\n  }\n  var u8 = Uint8Array, u16 = Uint16Array, i32 = Int32Array;\n  var fleb = new u8([\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    1,\n    1,\n    1,\n    1,\n    2,\n    2,\n    2,\n    2,\n    3,\n    3,\n    3,\n    3,\n    4,\n    4,\n    4,\n    4,\n    5,\n    5,\n    5,\n    5,\n    0,\n    /* unused */\n    0,\n    0,\n    /* impossible */\n    0\n  ]);\n  var fdeb = new u8([\n    0,\n    0,\n    0,\n    0,\n    1,\n    1,\n    2,\n    2,\n    3,\n    3,\n    4,\n    4,\n    5,\n    5,\n    6,\n    6,\n    7,\n    7,\n    8,\n    8,\n    9,\n    9,\n    10,\n    10,\n    11,\n    11,\n    12,\n    12,\n    13,\n    13,\n    /* unused */\n    0,\n    0\n  ]);\n  var clim = new u8([16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]);\n  var freb = function(eb, start) {\n    var b = new u16(31);\n    for (var i2 = 0; i2 < 31; ++i2) {\n      b[i2] = start += 1 << eb[i2 - 1];\n    }\n    var r = new i32(b[30]);\n    for (var i2 = 1; i2 < 30; ++i2) {\n      for (var j = b[i2]; j < b[i2 + 1]; ++j) {\n        r[j] = j - b[i2] << 5 | i2;\n      }\n    }\n    return { b, r };\n  };\n  var _a = freb(fleb, 2), fl = _a.b, revfl = _a.r;\n  fl[28] = 258, revfl[258] = 28;\n  var _b = freb(fdeb, 0), revfd = _b.r;\n  var rev = new u16(32768);\n  for (var i = 0; i < 32768; ++i) {\n    var x = (i & 43690) >> 1 | (i & 21845) << 1;\n    x = (x & 52428) >> 2 | (x & 13107) << 2;\n    x = (x & 61680) >> 4 | (x & 3855) << 4;\n    rev[i] = ((x & 65280) >> 8 | (x & 255) << 8) >> 1;\n  }\n  var hMap = (function(cd, mb, r) {\n    var s = cd.length;\n    var i2 = 0;\n    var l = new u16(mb);\n    for (; i2 < s; ++i2) {\n      if (cd[i2])\n        ++l[cd[i2] - 1];\n    }\n    var le = new u16(mb);\n    for (i2 = 1; i2 < mb; ++i2) {\n      le[i2] = le[i2 - 1] + l[i2 - 1] << 1;\n    }\n    var co;\n    if (r) {\n      co = new u16(1 << mb);\n      var rvb = 15 - mb;\n      for (i2 = 0; i2 < s; ++i2) {\n        if (cd[i2]) {\n          var sv = i2 << 4 | cd[i2];\n          var r_1 = mb - cd[i2];\n          var v = le[cd[i2] - 1]++ << r_1;\n          for (var m = v | (1 << r_1) - 1; v <= m; ++v) {\n            co[rev[v] >> rvb] = sv;\n          }\n        }\n      }\n    } else {\n      co = new u16(s);\n      for (i2 = 0; i2 < s; ++i2) {\n        if (cd[i2]) {\n          co[i2] = rev[le[cd[i2] - 1]++] >> 15 - cd[i2];\n        }\n      }\n    }\n    return co;\n  });\n  var flt = new u8(288);\n  for (var i = 0; i < 144; ++i)\n    flt[i] = 8;\n  for (var i = 144; i < 256; ++i)\n    flt[i] = 9;\n  for (var i = 256; i < 280; ++i)\n    flt[i] = 7;\n  for (var i = 280; i < 288; ++i)\n    flt[i] = 8;\n  var fdt = new u8(32);\n  for (var i = 0; i < 32; ++i)\n    fdt[i] = 5;\n  var flm = /* @__PURE__ */ hMap(flt, 9, 0);\n  var fdm = /* @__PURE__ */ hMap(fdt, 5, 0);\n  var shft = function(p) {\n    return (p + 7) / 8 | 0;\n  };\n  var slc = function(v, s, e) {\n    if (e == null || e > v.length)\n      e = v.length;\n    return new u8(v.subarray(s, e));\n  };\n  var ec = [\n    "unexpected EOF",\n    "invalid block type",\n    "invalid length/literal",\n    "invalid distance",\n    "stream finished",\n    "no stream handler",\n    ,\n    "no callback",\n    "invalid UTF-8 data",\n    "extra field too long",\n    "date not in range 1980-2099",\n    "filename too long",\n    "stream finishing",\n    "invalid zip data"\n    // determined by unknown compression method\n  ];\n  var err = function(ind, msg, nt) {\n    var e = new Error(msg || ec[ind]);\n    e.code = ind;\n    if (Error.captureStackTrace)\n      Error.captureStackTrace(e, err);\n    if (!nt)\n      throw e;\n    return e;\n  };\n  var wbits = function(d, p, v) {\n    v <<= p & 7;\n    var o = p / 8 | 0;\n    d[o] |= v;\n    d[o + 1] |= v >> 8;\n  };\n  var wbits16 = function(d, p, v) {\n    v <<= p & 7;\n    var o = p / 8 | 0;\n    d[o] |= v;\n    d[o + 1] |= v >> 8;\n    d[o + 2] |= v >> 16;\n  };\n  var hTree = function(d, mb) {\n    var t = [];\n    for (var i2 = 0; i2 < d.length; ++i2) {\n      if (d[i2])\n        t.push({ s: i2, f: d[i2] });\n    }\n    var s = t.length;\n    var t2 = t.slice();\n    if (!s)\n      return { t: et, l: 0 };\n    if (s == 1) {\n      var v = new u8(t[0].s + 1);\n      v[t[0].s] = 1;\n      return { t: v, l: 1 };\n    }\n    t.sort(function(a, b) {\n      return a.f - b.f;\n    });\n    t.push({ s: -1, f: 25001 });\n    var l = t[0], r = t[1], i0 = 0, i1 = 1, i22 = 2;\n    t[0] = { s: -1, f: l.f + r.f, l, r };\n    while (i1 != s - 1) {\n      l = t[t[i0].f < t[i22].f ? i0++ : i22++];\n      r = t[i0 != i1 && t[i0].f < t[i22].f ? i0++ : i22++];\n      t[i1++] = { s: -1, f: l.f + r.f, l, r };\n    }\n    var maxSym = t2[0].s;\n    for (var i2 = 1; i2 < s; ++i2) {\n      if (t2[i2].s > maxSym)\n        maxSym = t2[i2].s;\n    }\n    var tr = new u16(maxSym + 1);\n    var mbt = ln(t[i1 - 1], tr, 0);\n    if (mbt > mb) {\n      var i2 = 0, dt = 0;\n      var lft = mbt - mb, cst = 1 << lft;\n      t2.sort(function(a, b) {\n        return tr[b.s] - tr[a.s] || a.f - b.f;\n      });\n      for (; i2 < s; ++i2) {\n        var i2_1 = t2[i2].s;\n        if (tr[i2_1] > mb) {\n          dt += cst - (1 << mbt - tr[i2_1]);\n          tr[i2_1] = mb;\n        } else\n          break;\n      }\n      dt >>= lft;\n      while (dt > 0) {\n        var i2_2 = t2[i2].s;\n        if (tr[i2_2] < mb)\n          dt -= 1 << mb - tr[i2_2]++ - 1;\n        else\n          ++i2;\n      }\n      for (; i2 >= 0 && dt; --i2) {\n        var i2_3 = t2[i2].s;\n        if (tr[i2_3] == mb) {\n          --tr[i2_3];\n          ++dt;\n        }\n      }\n      mbt = mb;\n    }\n    return { t: new u8(tr), l: mbt };\n  };\n  var ln = function(n, l, d) {\n    return n.s == -1 ? Math.max(ln(n.l, l, d + 1), ln(n.r, l, d + 1)) : l[n.s] = d;\n  };\n  var lc = function(c) {\n    var s = c.length;\n    while (s && !c[--s])\n      ;\n    var cl = new u16(++s);\n    var cli = 0, cln = c[0], cls = 1;\n    var w = function(v) {\n      cl[cli++] = v;\n    };\n    for (var i2 = 1; i2 <= s; ++i2) {\n      if (c[i2] == cln && i2 != s)\n        ++cls;\n      else {\n        if (!cln && cls > 2) {\n          for (; cls > 138; cls -= 138)\n            w(32754);\n          if (cls > 2) {\n            w(cls > 10 ? cls - 11 << 5 | 28690 : cls - 3 << 5 | 12305);\n            cls = 0;\n          }\n        } else if (cls > 3) {\n          w(cln), --cls;\n          for (; cls > 6; cls -= 6)\n            w(8304);\n          if (cls > 2)\n            w(cls - 3 << 5 | 8208), cls = 0;\n        }\n        while (cls--)\n          w(cln);\n        cls = 1;\n        cln = c[i2];\n      }\n    }\n    return { c: cl.subarray(0, cli), n: s };\n  };\n  var clen = function(cf, cl) {\n    var l = 0;\n    for (var i2 = 0; i2 < cl.length; ++i2)\n      l += cf[i2] * cl[i2];\n    return l;\n  };\n  var wfblk = function(out, pos, dat) {\n    var s = dat.length;\n    var o = shft(pos + 2);\n    out[o] = s & 255;\n    out[o + 1] = s >> 8;\n    out[o + 2] = out[o] ^ 255;\n    out[o + 3] = out[o + 1] ^ 255;\n    for (var i2 = 0; i2 < s; ++i2)\n      out[o + i2 + 4] = dat[i2];\n    return (o + 4 + s) * 8;\n  };\n  var wblk = function(dat, out, final, syms, lf, df, eb, li, bs, bl, p) {\n    wbits(out, p++, final);\n    ++lf[256];\n    var _a2 = hTree(lf, 15), dlt = _a2.t, mlb = _a2.l;\n    var _b2 = hTree(df, 15), ddt = _b2.t, mdb = _b2.l;\n    var _c = lc(dlt), lclt = _c.c, nlc = _c.n;\n    var _d = lc(ddt), lcdt = _d.c, ndc = _d.n;\n    var lcfreq = new u16(19);\n    for (var i2 = 0; i2 < lclt.length; ++i2)\n      ++lcfreq[lclt[i2] & 31];\n    for (var i2 = 0; i2 < lcdt.length; ++i2)\n      ++lcfreq[lcdt[i2] & 31];\n    var _e = hTree(lcfreq, 7), lct = _e.t, mlcb = _e.l;\n    var nlcc = 19;\n    for (; nlcc > 4 && !lct[clim[nlcc - 1]]; --nlcc)\n      ;\n    var flen = bl + 5 << 3;\n    var ftlen = clen(lf, flt) + clen(df, fdt) + eb;\n    var dtlen = clen(lf, dlt) + clen(df, ddt) + eb + 14 + 3 * nlcc + clen(lcfreq, lct) + 2 * lcfreq[16] + 3 * lcfreq[17] + 7 * lcfreq[18];\n    if (bs >= 0 && flen <= ftlen && flen <= dtlen)\n      return wfblk(out, p, dat.subarray(bs, bs + bl));\n    var lm, ll, dm, dl;\n    wbits(out, p, 1 + (dtlen < ftlen)), p += 2;\n    if (dtlen < ftlen) {\n      lm = hMap(dlt, mlb, 0), ll = dlt, dm = hMap(ddt, mdb, 0), dl = ddt;\n      var llm = hMap(lct, mlcb, 0);\n      wbits(out, p, nlc - 257);\n      wbits(out, p + 5, ndc - 1);\n      wbits(out, p + 10, nlcc - 4);\n      p += 14;\n      for (var i2 = 0; i2 < nlcc; ++i2)\n        wbits(out, p + 3 * i2, lct[clim[i2]]);\n      p += 3 * nlcc;\n      var lcts = [lclt, lcdt];\n      for (var it = 0; it < 2; ++it) {\n        var clct = lcts[it];\n        for (var i2 = 0; i2 < clct.length; ++i2) {\n          var len = clct[i2] & 31;\n          wbits(out, p, llm[len]), p += lct[len];\n          if (len > 15)\n            wbits(out, p, clct[i2] >> 5 & 127), p += clct[i2] >> 12;\n        }\n      }\n    } else {\n      lm = flm, ll = flt, dm = fdm, dl = fdt;\n    }\n    for (var i2 = 0; i2 < li; ++i2) {\n      var sym = syms[i2];\n      if (sym > 255) {\n        var len = sym >> 18 & 31;\n        wbits16(out, p, lm[len + 257]), p += ll[len + 257];\n        if (len > 7)\n          wbits(out, p, sym >> 23 & 31), p += fleb[len];\n        var dst = sym & 31;\n        wbits16(out, p, dm[dst]), p += dl[dst];\n        if (dst > 3)\n          wbits16(out, p, sym >> 5 & 8191), p += fdeb[dst];\n      } else {\n        wbits16(out, p, lm[sym]), p += ll[sym];\n      }\n    }\n    wbits16(out, p, lm[256]);\n    return p + ll[256];\n  };\n  var deo = /* @__PURE__ */ new i32([65540, 131080, 131088, 131104, 262176, 1048704, 1048832, 2114560, 2117632]);\n  var et = /* @__PURE__ */ new u8(0);\n  var dflt = function(dat, lvl, plvl, pre, post2, st) {\n    var s = st.z || dat.length;\n    var o = new u8(pre + s + 5 * (1 + Math.ceil(s / 7e3)) + post2);\n    var w = o.subarray(pre, o.length - post2);\n    var lst = st.l;\n    var pos = (st.r || 0) & 7;\n    if (lvl) {\n      if (pos)\n        w[0] = st.r >> 3;\n      var opt = deo[lvl - 1];\n      var n = opt >> 13, c = opt & 8191;\n      var msk_1 = (1 << plvl) - 1;\n      var prev = st.p || new u16(32768), head = st.h || new u16(msk_1 + 1);\n      var bs1_1 = Math.ceil(plvl / 3), bs2_1 = 2 * bs1_1;\n      var hsh = function(i3) {\n        return (dat[i3] ^ dat[i3 + 1] << bs1_1 ^ dat[i3 + 2] << bs2_1) & msk_1;\n      };\n      var syms = new i32(25e3);\n      var lf = new u16(288), df = new u16(32);\n      var lc_1 = 0, eb = 0, i2 = st.i || 0, li = 0, wi = st.w || 0, bs = 0;\n      for (; i2 + 2 < s; ++i2) {\n        var hv = hsh(i2);\n        var imod = i2 & 32767, pimod = head[hv];\n        prev[imod] = pimod;\n        head[hv] = imod;\n        if (wi <= i2) {\n          var rem = s - i2;\n          if ((lc_1 > 7e3 || li > 24576) && (rem > 423 || !lst)) {\n            pos = wblk(dat, w, 0, syms, lf, df, eb, li, bs, i2 - bs, pos);\n            li = lc_1 = eb = 0, bs = i2;\n            for (var j = 0; j < 286; ++j)\n              lf[j] = 0;\n            for (var j = 0; j < 30; ++j)\n              df[j] = 0;\n          }\n          var l = 2, d = 0, ch_1 = c, dif = imod - pimod & 32767;\n          if (rem > 2 && hv == hsh(i2 - dif)) {\n            var maxn = Math.min(n, rem) - 1;\n            var maxd = Math.min(32767, i2);\n            var ml = Math.min(258, rem);\n            while (dif <= maxd && --ch_1 && imod != pimod) {\n              if (dat[i2 + l] == dat[i2 + l - dif]) {\n                var nl = 0;\n                for (; nl < ml && dat[i2 + nl] == dat[i2 + nl - dif]; ++nl)\n                  ;\n                if (nl > l) {\n                  l = nl, d = dif;\n                  if (nl > maxn)\n                    break;\n                  var mmd = Math.min(dif, nl - 2);\n                  var md = 0;\n                  for (var j = 0; j < mmd; ++j) {\n                    var ti = i2 - dif + j & 32767;\n                    var pti = prev[ti];\n                    var cd = ti - pti & 32767;\n                    if (cd > md)\n                      md = cd, pimod = ti;\n                  }\n                }\n              }\n              imod = pimod, pimod = prev[imod];\n              dif += imod - pimod & 32767;\n            }\n          }\n          if (d) {\n            syms[li++] = 268435456 | revfl[l] << 18 | revfd[d];\n            var lin = revfl[l] & 31, din = revfd[d] & 31;\n            eb += fleb[lin] + fdeb[din];\n            ++lf[257 + lin];\n            ++df[din];\n            wi = i2 + l;\n            ++lc_1;\n          } else {\n            syms[li++] = dat[i2];\n            ++lf[dat[i2]];\n          }\n        }\n      }\n      for (i2 = Math.max(i2, wi); i2 < s; ++i2) {\n        syms[li++] = dat[i2];\n        ++lf[dat[i2]];\n      }\n      pos = wblk(dat, w, lst, syms, lf, df, eb, li, bs, i2 - bs, pos);\n      if (!lst) {\n        st.r = pos & 7 | w[pos / 8 | 0] << 3;\n        pos -= 7;\n        st.h = head, st.p = prev, st.i = i2, st.w = wi;\n      }\n    } else {\n      for (var i2 = st.w || 0; i2 < s + lst; i2 += 65535) {\n        var e = i2 + 65535;\n        if (e >= s) {\n          w[pos / 8 | 0] = lst;\n          e = s;\n        }\n        pos = wfblk(w, pos + 1, dat.subarray(i2, e));\n      }\n      st.i = s;\n    }\n    return slc(o, 0, pre + shft(pos) + post2);\n  };\n  var crct = /* @__PURE__ */ (function() {\n    var t = new Int32Array(256);\n    for (var i2 = 0; i2 < 256; ++i2) {\n      var c = i2, k = 9;\n      while (--k)\n        c = (c & 1 && -306674912) ^ c >>> 1;\n      t[i2] = c;\n    }\n    return t;\n  })();\n  var crc = function() {\n    var c = -1;\n    return {\n      p: function(d) {\n        var cr = c;\n        for (var i2 = 0; i2 < d.length; ++i2)\n          cr = crct[cr & 255 ^ d[i2]] ^ cr >>> 8;\n        c = cr;\n      },\n      d: function() {\n        return ~c;\n      }\n    };\n  };\n  var dopt = function(dat, opt, pre, post2, st) {\n    if (!st) {\n      st = { l: 1 };\n      if (opt.dictionary) {\n        var dict = opt.dictionary.subarray(-32768);\n        var newDat = new u8(dict.length + dat.length);\n        newDat.set(dict);\n        newDat.set(dat, dict.length);\n        dat = newDat;\n        st.w = dict.length;\n      }\n    }\n    return dflt(dat, opt.level == null ? 6 : opt.level, opt.mem == null ? st.l ? Math.ceil(Math.max(8, Math.min(13, Math.log(dat.length))) * 1.5) : 20 : 12 + opt.mem, pre, post2, st);\n  };\n  var mrg = function(a, b) {\n    var o = {};\n    for (var k in a)\n      o[k] = a[k];\n    for (var k in b)\n      o[k] = b[k];\n    return o;\n  };\n  var wbytes = function(d, b, v) {\n    for (; v; ++b)\n      d[b] = v, v >>>= 8;\n  };\n  function deflateSync(data, opts) {\n    return dopt(data, opts || {}, 0, 0);\n  }\n  var fltn = function(d, p, t, o) {\n    for (var k in d) {\n      var val = d[k], n = p + k, op = o;\n      if (Array.isArray(val))\n        op = mrg(o, val[1]), val = val[0];\n      if (val instanceof u8)\n        t[n] = [val, op];\n      else {\n        t[n += "/"] = [new u8(0), op];\n        fltn(val, n, t, o);\n      }\n    }\n  };\n  var te = typeof TextEncoder != "undefined" && /* @__PURE__ */ new TextEncoder();\n  var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();\n  var tds = 0;\n  try {\n    td.decode(et, { stream: true });\n    tds = 1;\n  } catch (e) {\n  }\n  function strToU8(str, latin1) {\n    var i2;\n    if (te)\n      return te.encode(str);\n    var l = str.length;\n    var ar = new u8(str.length + (str.length >> 1));\n    var ai = 0;\n    var w = function(v) {\n      ar[ai++] = v;\n    };\n    for (var i2 = 0; i2 < l; ++i2) {\n      if (ai + 5 > ar.length) {\n        var n = new u8(ai + 8 + (l - i2 << 1));\n        n.set(ar);\n        ar = n;\n      }\n      var c = str.charCodeAt(i2);\n      if (c < 128 || latin1)\n        w(c);\n      else if (c < 2048)\n        w(192 | c >> 6), w(128 | c & 63);\n      else if (c > 55295 && c < 57344)\n        c = 65536 + (c & 1023 << 10) | str.charCodeAt(++i2) & 1023, w(240 | c >> 18), w(128 | c >> 12 & 63), w(128 | c >> 6 & 63), w(128 | c & 63);\n      else\n        w(224 | c >> 12), w(128 | c >> 6 & 63), w(128 | c & 63);\n    }\n    return slc(ar, 0, ai);\n  }\n  var exfl = function(ex) {\n    var le = 0;\n    if (ex) {\n      for (var k in ex) {\n        var l = ex[k].length;\n        if (l > 65535)\n          err(9);\n        le += l + 4;\n      }\n    }\n    return le;\n  };\n  var wzh = function(d, b, f, fn, u, c, ce, co) {\n    var fl2 = fn.length, ex = f.extra, col = co && co.length;\n    var exl = exfl(ex);\n    wbytes(d, b, ce != null ? 33639248 : 67324752), b += 4;\n    if (ce != null)\n      d[b++] = 20, d[b++] = f.os;\n    d[b] = 20, b += 2;\n    d[b++] = f.flag << 1 | (c < 0 && 8), d[b++] = u && 8;\n    d[b++] = f.compression & 255, d[b++] = f.compression >> 8;\n    var dt = new Date(f.mtime == null ? Date.now() : f.mtime), y = dt.getFullYear() - 1980;\n    if (y < 0 || y > 119)\n      err(10);\n    wbytes(d, b, y << 25 | dt.getMonth() + 1 << 21 | dt.getDate() << 16 | dt.getHours() << 11 | dt.getMinutes() << 5 | dt.getSeconds() >> 1), b += 4;\n    if (c != -1) {\n      wbytes(d, b, f.crc);\n      wbytes(d, b + 4, c < 0 ? -c - 2 : c);\n      wbytes(d, b + 8, f.size);\n    }\n    wbytes(d, b + 12, fl2);\n    wbytes(d, b + 14, exl), b += 16;\n    if (ce != null) {\n      wbytes(d, b, col);\n      wbytes(d, b + 6, f.attrs);\n      wbytes(d, b + 10, ce), b += 14;\n    }\n    d.set(fn, b);\n    b += fl2;\n    if (exl) {\n      for (var k in ex) {\n        var exf = ex[k], l = exf.length;\n        wbytes(d, b, +k);\n        wbytes(d, b + 2, l);\n        d.set(exf, b + 4), b += 4 + l;\n      }\n    }\n    if (col)\n      d.set(co, b), b += col;\n    return b;\n  };\n  var wzf = function(o, b, c, d, e) {\n    wbytes(o, b, 101010256);\n    wbytes(o, b + 8, c);\n    wbytes(o, b + 10, c);\n    wbytes(o, b + 12, d);\n    wbytes(o, b + 16, e);\n  };\n  function zipSync(data, opts) {\n    if (!opts)\n      opts = {};\n    var r = {};\n    var files = [];\n    fltn(data, "", r, opts);\n    var o = 0;\n    var tot = 0;\n    for (var fn in r) {\n      var _a2 = r[fn], file = _a2[0], p = _a2[1];\n      var compression = p.level == 0 ? 0 : 8;\n      var f = strToU8(fn), s = f.length;\n      var com = p.comment, m = com && strToU8(com), ms = m && m.length;\n      var exl = exfl(p.extra);\n      if (s > 65535)\n        err(11);\n      var d = compression ? deflateSync(file, p) : file, l = d.length;\n      var c = crc();\n      c.p(file);\n      files.push(mrg(p, {\n        size: file.length,\n        crc: c.d(),\n        c: d,\n        f,\n        m,\n        u: s != fn.length || m && com.length != ms,\n        o,\n        compression\n      }));\n      o += 30 + s + exl + l;\n      tot += 76 + 2 * (s + exl) + (ms || 0) + l;\n    }\n    var out = new u8(tot + 22), oe = o, cdl = tot - o;\n    for (var i2 = 0; i2 < files.length; ++i2) {\n      var f = files[i2];\n      wzh(out, f.o, f, f.f, f.u, f.c.length);\n      var badd = 30 + f.f.length + exfl(f.extra);\n      out.set(f.c, f.o + badd);\n      wzh(out, o, f, f.f, f.u, f.c.length, f.o, f.m), o += 16 + badd + (f.m ? f.m.length : 0);\n    }\n    wzf(out, o, files.length, cdl, oe);\n    return out;\n  }\n  function validateBundleZipPath(path) {\n    const normalized = path.replace(/\\\\/g, "/").replace(/^\\/+/, "");\n    if (!normalized || normalized.includes("..") || normalized.startsWith("/")) {\n      throw new Error(`Unsafe bundle ZIP path: ${path}`);\n    }\n    return normalized;\n  }\n  function createBundleZip(entries) {\n    const payload = {};\n    for (const entry of entries) {\n      const path = validateBundleZipPath(entry.path);\n      const options = { level: entry.level ?? 6 };\n      payload[path] = [typeof entry.data === "string" ? strToU8(entry.data) : entry.data, options];\n    }\n    return zipSync(payload);\n  }\n  function normalizeFilename(value) {\n    return String(value || "bundle").trim().replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "bundle";\n  }\n  function safeHttpUrl(value) {\n    if (typeof value !== "string") return void 0;\n    try {\n      const parsed = new URL(value);\n      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : void 0;\n    } catch {\n      return void 0;\n    }\n  }\n  function inferKind(original, record) {\n    const source = original && typeof original === "object" ? original : {};\n    const typename = String(source.__typename || record.__typename || "").toLowerCase();\n    if (typename.includes("tweet") || record.full_text || record.media) return "tweet";\n    if (typename.includes("user") || record.screen_name || record.profile_image_url) return "user";\n    return "unknown";\n  }\n  function extractObservedAt(original, record) {\n    const source = original && typeof original === "object" ? original : {};\n    const privateFields = source.twe_private_fields;\n    const candidates = [\n      privateFields == null ? void 0 : privateFields.created_at,\n      privateFields == null ? void 0 : privateFields.updated_at,\n      record.created_at,\n      record.time,\n      record.date\n    ];\n    for (const candidate of candidates) {\n      const numeric = Number(candidate);\n      if (Number.isFinite(numeric) && numeric > 0) {\n        return numeric;\n      }\n      if (typeof candidate === "string") {\n        const parsed = Date.parse(candidate);\n        if (Number.isFinite(parsed)) {\n          return parsed;\n        }\n      }\n    }\n    return void 0;\n  }\n  async function buildRecordEnvelope(bundleId, row, options) {\n    const kind = inferKind(row.original, row.record);\n    const sourceId = String(row.id || row.record.id || row.record.rest_id || "");\n    const id = await createBundleRecordId(bundleId, kind, sourceId || JSON.stringify(row.record));\n    const data = options.includeOriginalMetadata ? {\n      ...row.record,\n      metadata: row.original\n    } : row.record;\n    return {\n      id,\n      kind,\n      sourceId: sourceId || void 0,\n      observedAt: extractObservedAt(row.original, row.record),\n      sensitivity: "low",\n      data,\n      mediaRefs: Array.isArray(row.record.media) ? row.record.media.map((media, index) => ({\n        id: `${id}:media:${index}`,\n        type: media.type === "photo" || media.type === "video" || media.type === "animated_gif" ? media.type : "unknown",\n        url: safeHttpUrl(media.original),\n        previewUrl: safeHttpUrl(media.thumbnail),\n        altText: typeof media.ext_alt_text === "string" ? media.ext_alt_text : void 0\n      })) : void 0\n    };\n  }\n  function countBundleRecords(records) {\n    return records.reduce(\n      (acc, record) => {\n        acc.records += 1;\n        if (record.kind === "tweet") acc.tweets += 1;\n        if (record.kind === "user") acc.users += 1;\n        if (record.kind === "social_edge") acc.socialEdges += 1;\n        if (record.kind === "capture") acc.captures += 1;\n        acc.mediaBlobs += 0;\n        return acc;\n      },\n      { records: 0, tweets: 0, users: 0, socialEdges: 0, captures: 0, mediaBlobs: 0 }\n    );\n  }\n  async function createCanonicalBundleZip(rows, options) {\n    const now = Date.now();\n    const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();\n    const reportProgress = (phase, processedRecords) => {\n      var _a2;\n      (_a2 = options.onProgress) == null ? void 0 : _a2.call(options, {\n        phase,\n        processedRecords,\n        totalRecords: rows.length,\n        elapsedMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt\n      });\n    };\n    const bundleId = await createBundleId(\n      `${options.title}:${options.scope}:${options.queryText || ""}:${now}:${rows.length}`\n    );\n    const records = [];\n    for (let index = 0; index < rows.length; index += 1) {\n      const row = rows[index];\n      if (!row) continue;\n      records.push(await buildRecordEnvelope(bundleId, row, options));\n      if (index === 0 || index + 1 === rows.length || (index + 1) % 100 === 0) {\n        reportProgress("envelope", index + 1);\n      }\n    }\n    const recordsJsonl = records.map((record) => JSON.stringify(record)).join("\\n") + "\\n";\n    const privacy = buildBundlePrivacySummary(SAFE_SHARED_DEFAULT_PRIVACY);\n    const files = [\n      {\n        path: "manifest.json",\n        contentType: "application/json",\n        role: "manifest"\n      },\n      {\n        path: "records/records.jsonl",\n        contentType: "application/x-ndjson",\n        role: "records",\n        bytes: new TextEncoder().encode(recordsJsonl).byteLength,\n        sha256: await sha256Hex(recordsJsonl)\n      }\n    ];\n    const mediaUrlLines = records.flatMap((record) => record.mediaRefs || []).map((media) => media.url).filter((url) => !!url);\n    const mediaUrlsText = mediaUrlLines.join("\\n") + (mediaUrlLines.length ? "\\n" : "");\n    if (mediaUrlLines.length) {\n      files.push({\n        path: "media/media-urls.txt",\n        contentType: "text/plain",\n        role: "media",\n        bytes: new TextEncoder().encode(mediaUrlsText).byteLength,\n        sha256: await sha256Hex(mediaUrlsText)\n      });\n    }\n    const manifest = {\n      id: bundleId,\n      title: options.title,\n      description: options.description,\n      producer: {\n        app: "twitter-web-exporter",\n        appVersion: packageJson.version,\n        schemaVersion: 1,\n        exportedAt: now\n      },\n      privacy,\n      counts: countBundleRecords(records),\n      files\n    };\n    const manifestFile = files[0];\n    if (manifestFile) {\n      files[0] = {\n        ...manifestFile,\n        bytes: new TextEncoder().encode(JSON.stringify(manifest, void 0, 2)).byteLength\n      };\n    }\n    reportProgress("manifest", records.length);\n    const compressionLevel = options.compressionLevel ?? 1;\n    const entries = [\n      {\n        path: "manifest.json",\n        data: JSON.stringify(manifest, void 0, 2),\n        level: compressionLevel\n      },\n      {\n        path: "records/records.jsonl",\n        data: recordsJsonl,\n        level: compressionLevel\n      }\n    ];\n    if (mediaUrlLines.length) {\n      entries.push({ path: "media/media-urls.txt", data: mediaUrlsText, level: compressionLevel });\n    }\n    reportProgress("zip", records.length);\n    const result = {\n      filename: `twe-bundle-${normalizeFilename(options.title)}-${now}.zip`,\n      bytes: createBundleZip(entries),\n      manifest\n    };\n    reportProgress("done", records.length);\n    return result;\n  }\n  const cancelledJobs = /* @__PURE__ */ new Set();\n  function nowMs() {\n    if (typeof performance !== "undefined" && typeof performance.now === "function") {\n      return performance.now();\n    }\n    return Date.now();\n  }\n  function post(message, transfer) {\n    self.postMessage(message, { transfer: transfer || [] });\n  }\n  function errorMessage(error) {\n    return error instanceof Error ? error.message : String(error);\n  }\n  self.onmessage = (event) => {\n    const request = event.data;\n    if (!request || typeof request !== "object") return;\n    if (request.type === "bundle-export:cancel") {\n      cancelledJobs.add(request.jobId);\n      return;\n    }\n    if (request.type !== "bundle-export:start") return;\n    const startedAt = nowMs();\n    void (async () => {\n      try {\n        if (cancelledJobs.has(request.jobId)) {\n          cancelledJobs.delete(request.jobId);\n          return;\n        }\n        const result = await createCanonicalBundleZip(request.rows, {\n          ...request.options,\n          onProgress: (progress) => {\n            if (cancelledJobs.has(request.jobId)) {\n              throw new Error("Bundle export cancelled.");\n            }\n            post({ type: "bundle-export:progress", jobId: request.jobId, progress });\n          }\n        });\n        if (cancelledJobs.has(request.jobId)) {\n          cancelledJobs.delete(request.jobId);\n          return;\n        }\n        const buffer = result.bytes.buffer.slice(\n          result.bytes.byteOffset,\n          result.bytes.byteOffset + result.bytes.byteLength\n        );\n        post(\n          {\n            type: "bundle-export:done",\n            jobId: request.jobId,\n            filename: result.filename,\n            buffer,\n            manifest: result.manifest,\n            elapsedMs: nowMs() - startedAt\n          },\n          [buffer]\n        );\n      } catch (error) {\n        post({\n          type: "bundle-export:error",\n          jobId: request.jobId,\n          error: errorMessage(error),\n          elapsedMs: nowMs() - startedAt\n        });\n      } finally {\n        cancelledJobs.delete(request.jobId);\n      }\n    })();\n  };\n})();\n';
   const blob$1 = typeof self !== "undefined" && self.Blob && new Blob([jsContent$1], { type: "text/javascript;charset=utf-8" });
   function WorkerWrapper$1(options2) {
     let objURL;
@@ -18096,9 +18376,10 @@ none: ${bookmarkStatus.counts.none}`,
     }
     return { kind: "tweets", count: normalizedTweets.length };
   }
-  function projectUsers(extName, users) {
-    void dbProxy.extAddUsers(extName, users);
-    return { kind: "users", count: Array.isArray(users) ? users.length : 0 };
+  async function projectUsers(extName, users) {
+    const normalizedUsers = Array.isArray(users) ? users : [];
+    await dbProxy.extAddUsers(extName, normalizedUsers);
+    return { kind: "users", count: normalizedUsers.length };
   }
   async function projectUsersWithEdges(extName, users, edges) {
     const normalizedUsers = Array.isArray(users) ? users : [];
@@ -18137,9 +18418,12 @@ none: ${bookmarkStatus.counts.none}`,
           });
         };
         if (projection && typeof projection.then === "function") {
-          void projection.then(
-            (resolved) => finish(resolved)
-          );
+          void projection.then((resolved) => finish(resolved)).catch((err2) => {
+            logger.errorWithBanner(
+              `${spec.moduleName}: Failed to write API response projection`,
+              err2 instanceof Error ? err2 : new Error(String(err2))
+            );
+          });
         } else {
           finish(projection);
         }
@@ -18812,12 +19096,16 @@ none: ${bookmarkStatus.counts.none}`,
           }
         }
       }
-      projectTweets(ext.name, newData);
-      triggerFolderNameBackfillIfNeeded(ext.name, folderCtx.folder_id, newData);
-      logModuleItemsReceived(
-        `Bookmarks${folderCtx.folder_id ? ` (folder: ${folderCtx.folder_name ?? folderCtx.folder_id})` : ""}`,
-        newData.length
-      );
+      const label = `Bookmarks${folderCtx.folder_id ? ` (folder: ${folderCtx.folder_name ?? folderCtx.folder_id})` : ""}`;
+      void projectTweets(ext.name, newData).then(() => {
+        triggerFolderNameBackfillIfNeeded(ext.name, folderCtx.folder_id, newData);
+        logModuleItemsReceived(label, newData.length);
+      }).catch((err2) => {
+        logger.errorWithBanner(
+          `${label}: Failed to write API response projection`,
+          err2 instanceof Error ? err2 : new Error(String(err2))
+        );
+      });
     } catch (err2) {
       logModuleParseFailure("Bookmarks", req, res, err2);
     }

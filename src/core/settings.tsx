@@ -32,6 +32,7 @@ import {
 import { exportDiagnosticsBundleZip } from '@/modules/runtime-logs/diagnostics-bundle';
 
 import { db } from './database';
+import { collectIndexedDbInventory } from './database/inventory';
 import extensionManager, { ExtensionType } from './extensions';
 import { DEFAULT_APP_OPTIONS, options, THEMES } from './options';
 
@@ -592,10 +593,13 @@ export function Settings() {
                   }
 
                   const count = await db.count();
+                  const inventory = await collectIndexedDbInventory();
                   alert(
                     storageUsageText +
                       '\n\nIndexedDB tables count:\n' +
-                      JSON.stringify(count, undefined, '  '),
+                      JSON.stringify(count, undefined, '  ') +
+                      '\n\nScrollmark database inventory:\n' +
+                      JSON.stringify(inventory, undefined, '  '),
                   );
                 }}
               >

@@ -914,14 +914,20 @@ export const BookmarksInterceptor: Interceptor = (req, res, ext) => {
       }
     }
 
-    // Add captured data to the database.
-    projectTweets(ext.name, newData);
-    triggerFolderNameBackfillIfNeeded(ext.name, folderCtx.folder_id, newData);
+    const label = `Bookmarks${folderCtx.folder_id ? ` (folder: ${folderCtx.folder_name ?? folderCtx.folder_id})` : ''}`;
 
-    logModuleItemsReceived(
-      `Bookmarks${folderCtx.folder_id ? ` (folder: ${folderCtx.folder_name ?? folderCtx.folder_id})` : ''}`,
-      newData.length,
-    );
+    // Add captured data to the database.
+    void projectTweets(ext.name, newData)
+      .then(() => {
+        triggerFolderNameBackfillIfNeeded(ext.name, folderCtx.folder_id, newData);
+        logModuleItemsReceived(label, newData.length);
+      })
+      .catch((err) => {
+        logger.errorWithBanner(
+          `${label}: Failed to write API response projection`,
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      });
   } catch (err) {
     logModuleParseFailure('Bookmarks', req, res, err as Error);
   }

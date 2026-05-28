@@ -1,7 +1,7 @@
 {
   "name": "scrollmark",
   "description": "Scrollmark: local-first X/Twitter research archive, search, and portable bundle export.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Kyle McCleary",
   "license": "MIT",
   "homepage": "https://github.com/kmccleary3301/scrollmark",

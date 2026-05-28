@@ -1,5 +1,5 @@
 import { unsafeWindow } from '$';
-import Dexie, { KeyPaths } from 'dexie';
+import Dexie, { IndexableType, KeyPaths, Table } from 'dexie';
 import { exportDB, importInto } from 'dexie-export-import';
 
 import {
@@ -29,6 +29,7 @@ const CAPTURE_COUNT_SNAPSHOT_KEY = '__twe_capture_counts_v1';
 const CAPTURE_COUNT_SNAPSHOT_V2_KEY = '__twe_capture_counts_v2';
 const ACTIVE_DB_NAME_KEY = '__twe_active_db_name_v1';
 const CAPTURE_COUNT_EVENT_NAME = 'twe:capture-count-updated-v1';
+const DB_WRITE_CHUNK_SIZE = 500;
 
 const BOOKMARK_CONTEXT_FIELDS = [
   '__bookmark_folder_id',
@@ -47,6 +48,18 @@ interface BookmarkFolderNameBackfillSummary {
   candidates: number;
   inspected: number;
   updated: number;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (items.length <= size) {
+    return [items];
+  }
+
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 export interface SearchDocumentRow {
@@ -150,6 +163,7 @@ declare global {
 
 export class DatabaseManager {
   private db: Dexie;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     let userId = 'unknown';
@@ -169,6 +183,18 @@ export class DatabaseManager {
     this.db = new Dexie(`${DB_NAME}${suffix}`);
     this.publishActiveDatabaseName();
     this.init();
+  }
+
+  private enqueueWrite<T>(operation: string, write: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(write, write);
+    this.writeQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.catch((error) => {
+      this.logError(error, operation);
+      throw error;
+    });
   }
 
   /*
@@ -514,55 +540,81 @@ export class DatabaseManager {
   */
 
   async extAddTweets(extName: string, tweets: Tweet[]) {
-    if (!tweets.length) {
+    const normalizedTweets = this.normalizeRowsByRestId(tweets);
+    if (!normalizedTweets.length) {
       return;
     }
 
-    await this.upsertTweets(tweets);
-    await this.upsertCaptures(
-      tweets.map((tweet) => ({
+    await this.enqueueWrite('extAddTweets', async () => {
+      const now = Date.now();
+      const captures = normalizedTweets.map((tweet) => ({
         id: `${extName}-${tweet.rest_id}`,
         extension: extName,
         type: ExtensionType.TWEET,
         data_key: tweet.rest_id,
-        created_at: Date.now(),
-      })),
-    );
-    await this.upsertSearchDocuments(this.buildTweetSearchDocuments(extName, tweets));
+        created_at: now,
+      }));
+      const documents = this.buildTweetSearchDocuments(extName, normalizedTweets);
 
-    emitDatabaseMutation({
-      extension: extName,
-      operation: 'extAddTweets',
-      count: tweets.length,
-      keys: tweets.map((tweet) => tweet.rest_id),
+      await this.db.transaction(
+        'rw',
+        this.tweets(),
+        this.captures(),
+        this.searchDocuments(),
+        async () => {
+          await this.putMergedTweets(normalizedTweets);
+          await this.bulkPutInChunks(this.captures(), captures);
+          await this.bulkPutInChunks(this.searchDocuments(), documents);
+        },
+      );
+
+      emitDatabaseMutation({
+        extension: extName,
+        operation: 'extAddTweets',
+        count: normalizedTweets.length,
+        keys: normalizedTweets.map((tweet) => tweet.rest_id),
+      });
+      void this.publishCaptureCountSnapshot(extName);
     });
-    void this.publishCaptureCountSnapshot(extName);
   }
 
   async extAddUsers(extName: string, users: User[]) {
-    if (!users.length) {
+    const normalizedUsers = this.normalizeRowsByRestId(users);
+    if (!normalizedUsers.length) {
       return;
     }
 
-    await this.upsertUsers(users);
-    await this.upsertCaptures(
-      users.map((user) => ({
+    await this.enqueueWrite('extAddUsers', async () => {
+      const now = Date.now();
+      const captures = normalizedUsers.map((user) => ({
         id: `${extName}-${user.rest_id}`,
         extension: extName,
         type: ExtensionType.USER,
         data_key: user.rest_id,
-        created_at: Date.now(),
-      })),
-    );
-    await this.upsertSearchDocuments(this.buildUserSearchDocuments(extName, users));
+        created_at: now,
+      }));
+      const documents = this.buildUserSearchDocuments(extName, normalizedUsers);
 
-    emitDatabaseMutation({
-      extension: extName,
-      operation: 'extAddUsers',
-      count: users.length,
-      keys: users.map((user) => user.rest_id),
+      await this.db.transaction(
+        'rw',
+        this.users(),
+        this.captures(),
+        this.searchDocuments(),
+        async () => {
+          await this.putUsers(normalizedUsers);
+          await this.bulkPutInChunks(this.captures(), captures);
+          await this.bulkPutInChunks(this.searchDocuments(), documents);
+        },
+      );
+
+      emitDatabaseMutation({
+        extension: extName,
+        operation: 'extAddUsers',
+        count: normalizedUsers.length,
+        keys: normalizedUsers.map((user) => user.rest_id),
+      });
+      void this.publishCaptureCountSnapshot(extName);
     });
-    void this.publishCaptureCountSnapshot(extName);
   }
 
   async extAddCustomCaptures(
@@ -593,14 +645,18 @@ export class DatabaseManager {
       return;
     }
 
-    await this.upsertCaptures(captures);
-    emitDatabaseMutation({
-      extension: extName,
-      operation: 'extAddCustomCaptures',
-      count: captures.length,
-      keys: captures.map((capture) => capture.data_key),
+    await this.enqueueWrite('extAddCustomCaptures', async () => {
+      await this.db.transaction('rw', this.captures(), async () => {
+        await this.bulkPutInChunks(this.captures(), captures);
+      });
+      emitDatabaseMutation({
+        extension: extName,
+        operation: 'extAddCustomCaptures',
+        count: captures.length,
+        keys: captures.map((capture) => capture.data_key),
+      });
+      void this.publishCaptureCountSnapshot(extName);
     });
-    void this.publishCaptureCountSnapshot(extName);
   }
 
   async extAddSocialEdges(extName: string, edges: SocialEdge[]) {
@@ -618,12 +674,16 @@ export class DatabaseManager {
       return;
     }
 
-    await this.upsertSocialEdges(normalized);
-    emitDatabaseMutation({
-      extension: extName,
-      operation: 'extAddSocialEdges',
-      count: normalized.length,
-      keys: normalized.map((edge) => edge.id),
+    await this.enqueueWrite('extAddSocialEdges', async () => {
+      await this.db.transaction('rw', this.socialEdges(), async () => {
+        await this.bulkPutInChunks(this.socialEdges(), normalized);
+      });
+      emitDatabaseMutation({
+        extension: extName,
+        operation: 'extAddSocialEdges',
+        count: normalized.length,
+        keys: normalized.map((edge) => edge.id),
+      });
     });
   }
 
@@ -637,38 +697,50 @@ export class DatabaseManager {
       return;
     }
 
-    await this.db
-      .transaction('rw', this.tweets(), this.captures(), this.searchDocuments(), async () => {
-        let existingRows: Tweet[] = [];
-        if (mutateExisting) {
-          existingRows = await this.tweets().where('rest_id').anyOf(ids).toArray();
-          if (existingRows.length) {
-            await this.tweets().bulkPut(existingRows.map((row) => mutateExisting(row)));
+    await this.enqueueWrite('extAddTweetCaptureIds', async () => {
+      await this.db.transaction(
+        'rw',
+        this.tweets(),
+        this.captures(),
+        this.searchDocuments(),
+        async () => {
+          const existingRows: Tweet[] = [];
+          for (const chunk of chunkArray(ids, DB_WRITE_CHUNK_SIZE)) {
+            existingRows.push(...(await this.tweets().where('rest_id').anyOf(chunk).toArray()));
           }
-        } else {
-          existingRows = await this.tweets().where('rest_id').anyOf(ids).toArray();
-        }
 
-        await this.captures().bulkPut(
-          ids.map((tweetId) => ({
-            id: `${extName}-${tweetId}`,
+          if (mutateExisting && existingRows.length) {
+            await this.bulkPutInChunks(
+              this.tweets(),
+              existingRows.map((row) => mutateExisting(row)),
+            );
+          }
+
+          await this.bulkPutInChunks(
+            this.captures(),
+            ids.map((tweetId) => ({
+              id: `${extName}-${tweetId}`,
+              extension: extName,
+              type: ExtensionType.TWEET,
+              data_key: tweetId,
+              created_at: Date.now(),
+            })),
+          );
+          await this.bulkPutInChunks(
+            this.searchDocuments(),
+            this.buildTweetSearchDocuments(extName, existingRows),
+          );
+
+          emitDatabaseMutation({
             extension: extName,
-            type: ExtensionType.TWEET,
-            data_key: tweetId,
-            created_at: Date.now(),
-          })),
-        );
-        await this.searchDocuments().bulkPut(this.buildTweetSearchDocuments(extName, existingRows));
-      })
-      .catch(this.logError);
-
-    emitDatabaseMutation({
-      extension: extName,
-      operation: 'extAddTweetCaptureIds',
-      count: ids.length,
-      keys: ids,
+            operation: 'extAddTweetCaptureIds',
+            count: ids.length,
+            keys: ids,
+          });
+          void this.publishCaptureCountSnapshot(extName);
+        },
+      );
     });
-    void this.publishCaptureCountSnapshot(extName);
   }
 
   async extBackfillTweetCapturesFromAllTweets(extName: string) {
@@ -1338,20 +1410,18 @@ export class DatabaseManager {
   async upsertSearchDocuments(rows: SearchDocumentRow[]) {
     if (!rows.length) return;
     const startedAt = nowMs();
-    return this.db
-      .transaction('rw', this.searchDocuments(), () => {
-        return this.searchDocuments().bulkPut(rows).catch(this.logError);
-      })
-      .then((result) => {
-        recordPerfMetric({
-          kind: 'db',
-          name: 'search-documents-upsert',
-          durationMs: nowMs() - startedAt,
-          value: rows.length,
-        });
-        return result;
-      })
-      .catch(this.logError);
+    return this.enqueueWrite('upsertSearchDocuments', async () => {
+      const result = await this.db.transaction('rw', this.searchDocuments(), async () => {
+        await this.bulkPutInChunks(this.searchDocuments(), rows);
+      });
+      recordPerfMetric({
+        kind: 'db',
+        name: 'search-documents-upsert',
+        durationMs: nowMs() - startedAt,
+        value: rows.length,
+      });
+      return result;
+    });
   }
 
   async extBackfillSearchDocuments(extName: string, type: ExtensionType, chunkSize = 640) {
@@ -1412,65 +1482,108 @@ export class DatabaseManager {
     return { processed, documents };
   }
 
-  async upsertTweets(tweets: Tweet[]) {
+  private async putMergedTweets(tweets: Tweet[]) {
     if (!tweets.length) {
       return;
     }
 
-    return this.db
-      .transaction('rw', this.tweets(), async () => {
-        const ids = tweets.map((tweet) => tweet.rest_id);
-        const existingRows = await this.tweets().where('rest_id').anyOf(ids).toArray();
-        const existingById = new Map(existingRows.map((row) => [String(row.rest_id), row]));
+    const ids = this.normalizeDataKeys(tweets.map((tweet) => tweet.rest_id));
+    const existingRows: Tweet[] = [];
+    for (const chunk of chunkArray(ids, DB_WRITE_CHUNK_SIZE)) {
+      existingRows.push(...(await this.tweets().where('rest_id').anyOf(chunk).toArray()));
+    }
+    const existingById = new Map(existingRows.map((row) => [String(row.rest_id), row]));
 
-        const data: Tweet[] = tweets.map((tweet) => {
-          const normalized = {
-            ...tweet,
-            twe_private_fields: {
-              created_at: extractTweetCreatedAtMs(tweet),
-              updated_at: Date.now(),
-              media_count: extractTweetMedia(tweet).length,
-            },
-          };
+    const data: Tweet[] = tweets.map((tweet) => {
+      const normalized = {
+        ...tweet,
+        twe_private_fields: {
+          created_at: extractTweetCreatedAtMs(tweet),
+          updated_at: Date.now(),
+          media_count: extractTweetMedia(tweet).length,
+        },
+      };
 
-          return mergeTweetMetadata(existingById.get(tweet.rest_id) ?? null, normalized);
-        });
+      return mergeTweetMetadata(existingById.get(tweet.rest_id) ?? null, normalized);
+    });
 
-        return this.tweets().bulkPut(data);
-      })
-      .catch(this.logError);
+    await this.bulkPutInChunks(this.tweets(), data);
+  }
+
+  private async putUsers(users: User[]) {
+    if (!users.length) {
+      return;
+    }
+
+    const data: User[] = users.map((user) => ({
+      ...user,
+      twe_private_fields: {
+        created_at: +parseTwitterDateTime(user.core.created_at),
+        updated_at: Date.now(),
+      },
+    }));
+
+    await this.bulkPutInChunks(this.users(), data);
+  }
+
+  private async bulkPutInChunks<T>(table: Table<T, IndexableType>, rows: T[]) {
+    for (const chunk of chunkArray(rows, DB_WRITE_CHUNK_SIZE)) {
+      await table.bulkPut(chunk);
+    }
+  }
+
+  private normalizeRowsByRestId<T extends { rest_id?: string }>(rows: T[]): T[] {
+    const byId = new Map<string, T>();
+    for (const row of rows) {
+      const id = String(row?.rest_id || '').trim();
+      if (!id) continue;
+      byId.set(id, { ...row, rest_id: id });
+    }
+    return [...byId.values()];
+  }
+
+  async upsertTweets(tweets: Tweet[]) {
+    const normalizedTweets = this.normalizeRowsByRestId(tweets);
+    if (!normalizedTweets.length) {
+      return;
+    }
+
+    return this.enqueueWrite('upsertTweets', async () => {
+      await this.db.transaction('rw', this.tweets(), async () => {
+        await this.putMergedTweets(normalizedTweets);
+      });
+    });
   }
 
   async upsertUsers(users: User[]) {
-    return this.db
-      .transaction('rw', this.users(), () => {
-        const data: User[] = users.map((user) => ({
-          ...user,
-          twe_private_fields: {
-            created_at: +parseTwitterDateTime(user.core.created_at),
-            updated_at: Date.now(),
-          },
-        }));
+    const normalizedUsers = this.normalizeRowsByRestId(users);
+    if (!normalizedUsers.length) {
+      return;
+    }
 
-        return this.users().bulkPut(data);
-      })
-      .catch(this.logError);
+    return this.enqueueWrite('upsertUsers', async () => {
+      await this.db.transaction('rw', this.users(), async () => {
+        await this.putUsers(normalizedUsers);
+      });
+    });
   }
 
   async upsertCaptures(captures: Capture[]) {
-    return this.db
-      .transaction('rw', this.captures(), () => {
-        return this.captures().bulkPut(captures).catch(this.logError);
-      })
-      .catch(this.logError);
+    if (!captures.length) return;
+    return this.enqueueWrite('upsertCaptures', async () => {
+      await this.db.transaction('rw', this.captures(), async () => {
+        await this.bulkPutInChunks(this.captures(), captures);
+      });
+    });
   }
 
   async upsertSocialEdges(edges: SocialEdge[]) {
-    return this.db
-      .transaction('rw', this.socialEdges(), () => {
-        return this.socialEdges().bulkPut(edges).catch(this.logError);
-      })
-      .catch(this.logError);
+    if (!edges.length) return;
+    return this.enqueueWrite('upsertSocialEdges', async () => {
+      await this.db.transaction('rw', this.socialEdges(), async () => {
+        await this.bulkPutInChunks(this.socialEdges(), edges);
+      });
+    });
   }
 
   async deleteAllTweets() {
@@ -1774,7 +1887,9 @@ export class DatabaseManager {
   |--------------------------------------------------------------------------
   */
 
-  logError(error: unknown) {
-    logger.error(`Database Error: ${(error as Error).message}`, error);
+  logError(error: unknown, operation?: string) {
+    const message = error instanceof Error ? error.message : String(error);
+    const prefix = operation ? `Database Error (${operation})` : 'Database Error';
+    logger.error(`${prefix}: ${message}`, error);
   }
 }

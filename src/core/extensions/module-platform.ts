@@ -61,9 +61,13 @@ export async function projectTweets(
   return { kind: 'tweets', count: normalizedTweets.length };
 }
 
-export function projectUsers(extName: string, users: unknown[]): ModuleProjectionResult {
-  void db.extAddUsers(extName, users as never[]);
-  return { kind: 'users', count: Array.isArray(users) ? users.length : 0 };
+export async function projectUsers(
+  extName: string,
+  users: unknown[],
+): Promise<ModuleProjectionResult> {
+  const normalizedUsers = Array.isArray(users) ? users : [];
+  await db.extAddUsers(extName, normalizedUsers as never[]);
+  return { kind: 'users', count: normalizedUsers.length };
 }
 
 export async function projectUsersWithEdges(
@@ -79,9 +83,13 @@ export async function projectUsersWithEdges(
   return { kind: 'users', count: normalizedUsers.length };
 }
 
-export function projectCustom(extName: string, items: unknown[]): ModuleProjectionResult {
-  void db.extAddCustomCaptures(extName, items as never[]);
-  return { kind: 'custom', count: Array.isArray(items) ? items.length : 0 };
+export async function projectCustom(
+  extName: string,
+  items: unknown[],
+): Promise<ModuleProjectionResult> {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  await db.extAddCustomCaptures(extName, normalizedItems as never[]);
+  return { kind: 'custom', count: normalizedItems.length };
 }
 
 export function logModuleItemsReceived(moduleName: string, count: number): void {
@@ -127,9 +135,14 @@ export function createModuleInterceptor<T>(spec: ModuleInterceptorSpec<T>): Inte
       };
 
       if (projection && typeof (projection as Promise<unknown>).then === 'function') {
-        void (projection as Promise<void | ModuleProjectionResult>).then((resolved) =>
-          finish(resolved),
-        );
+        void (projection as Promise<void | ModuleProjectionResult>)
+          .then((resolved) => finish(resolved))
+          .catch((err) => {
+            logger.errorWithBanner(
+              `${spec.moduleName}: Failed to write API response projection`,
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          });
       } else {
         finish(projection as void | ModuleProjectionResult);
       }
