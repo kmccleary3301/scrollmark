@@ -7,10 +7,24 @@ import {
 } from '@/core/bundles/export-worker-client';
 import { TranslationKey, useTranslation } from '@/i18n';
 import { ResultSetSnapshot } from '@/utils/result-set';
-import { useSignalState, cx, useToggle } from '@/utils/common';
+import { useSignalState, cx } from '@/utils/common';
 import { DataType, EXPORT_FORMAT, ExportFormatType, exportData } from '@/utils/exporter';
+import { options } from '@/core/options';
+import {
+  applyMetadataToRecord,
+  cloneSnapshotValue,
+  DEFAULT_METADATA_FIELDS,
+  type ExportMetadataMode,
+  normalizeMetadataFields,
+} from '@/utils/export-metadata';
 
 type ExportScopeType = 'selected' | 'result_set';
+type ExportColumnMode = 'all' | 'custom';
+
+type ExportColumnOption = {
+  key: string;
+  label: string;
+};
 
 type ExportRowSnapshot<T> = {
   id: string;
@@ -29,26 +43,6 @@ type ExportDataModalProps<T> = {
   show?: boolean;
   onClose?: () => void;
 };
-
-function cloneSnapshotValue<T>(value: T): T {
-  if (value === null || value === undefined || typeof value !== 'object') {
-    return value;
-  }
-
-  if (typeof structuredClone === 'function') {
-    try {
-      return structuredClone(value);
-    } catch {
-      // Fall through to JSON cloning.
-    }
-  }
-
-  try {
-    return JSON.parse(JSON.stringify(value)) as T;
-  } catch {
-    return value;
-  }
-}
 
 function getAccessorPathValue(record: unknown, path: string): unknown {
   if (!record || typeof record !== 'object') return undefined;
@@ -96,6 +90,36 @@ function resolveColumnValue<T>(column: ColumnDef<T>, record: T, rowIndex: number
     }
   }
   return undefined;
+}
+
+function normalizeExportColumnFields(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function getExportColumnOptions<T>(columns: ColumnDef<T>[]): ExportColumnOption[] {
+  return flattenLeafColumns(columns)
+    .filter((column) => column.meta?.exportable !== false)
+    .map((column) => ({
+      key: column.meta?.exportKey || resolveColumnId(column),
+      label: column.meta?.exportHeader || resolveColumnId(column),
+    }))
+    .filter((column) => !!column.key);
+}
+
+function filterRecordColumns(record: DataType, mode: ExportColumnMode, fields: string[]): DataType {
+  if (mode === 'all') return record;
+  const selected = new Set(fields);
+  return Object.fromEntries(
+    Object.entries(record).filter(([key]) => selected.has(key)),
+  ) as DataType;
 }
 
 function snapshotExportRow<T>(
@@ -170,7 +194,22 @@ export function ExportDataModal<T>({
   const [loading, setLoading] = useSignalState(false);
   const [bundleLoading, setBundleLoading] = useSignalState(false);
 
-  const [includeMetadata, toggleIncludeMetadata] = useToggle(false);
+  const [columnMode, setColumnMode] = useSignalState<ExportColumnMode>(
+    options.get('exportColumnMode', 'all') ?? 'all',
+  );
+  const [columnFields, setColumnFields] = useSignalState<string[]>(
+    normalizeExportColumnFields(options.get('exportColumnFields', [])),
+  );
+
+  const [metadataMode, setMetadataMode] = useSignalState<ExportMetadataMode>(
+    options.get('exportMetadataMode', 'none') ?? 'none',
+  );
+  const [metadataFields, setMetadataFields] = useSignalState<string[]>(
+    normalizeMetadataFields(options.get('exportMetadataFields', [])),
+  );
+  const exportColumnOptions = getExportColumnOptions(columns);
+  const selectedColumnFieldSet = new Set(columnFields);
+  const selectedMetadataFieldSet = new Set(metadataFields);
   const [currentProgress, setCurrentProgress] = useSignalState(0);
   const [totalProgress, setTotalProgress] = useSignalState(0);
   const [exportScope, setExportScope] = useSignalState<ExportScopeType>('result_set');
@@ -219,6 +258,55 @@ export function ExportDataModal<T>({
   const buildActiveRows = () =>
     activeSourceRecords.map((record, index) => snapshotExportRow(record, columns, index));
 
+  const updateColumnMode = (mode: ExportColumnMode) => {
+    setColumnMode(mode);
+    options.set('exportColumnMode', mode);
+  };
+
+  const updateColumnFields = (fields: string[]) => {
+    const available = new Set(exportColumnOptions.map((column) => column.key));
+    const normalized = normalizeExportColumnFields(fields).filter((field) => available.has(field));
+    setColumnFields(normalized);
+    options.set('exportColumnFields', normalized);
+  };
+
+  const toggleColumnField = (field: string) => {
+    const next = selectedColumnFieldSet.has(field)
+      ? columnFields.filter((item) => item !== field)
+      : [...columnFields, field];
+    updateColumnFields(next);
+    if (columnMode === 'all') {
+      updateColumnMode('custom');
+    }
+  };
+
+  const buildExportRecord = (row: ExportRowSnapshot<T>) => {
+    const record = filterRecordColumns(cloneSnapshotValue(row.record), columnMode, columnFields);
+    applyMetadataToRecord(record, row.original, metadataMode, metadataFields);
+    return record;
+  };
+
+  const updateMetadataMode = (mode: ExportMetadataMode) => {
+    setMetadataMode(mode);
+    options.set('exportMetadataMode', mode);
+  };
+
+  const updateMetadataFields = (fields: string[]) => {
+    const normalized = normalizeMetadataFields(fields);
+    setMetadataFields(normalized);
+    options.set('exportMetadataFields', normalized);
+  };
+
+  const toggleMetadataField = (field: string) => {
+    const next = selectedMetadataFieldSet.has(field)
+      ? metadataFields.filter((item) => item !== field)
+      : [...metadataFields, field];
+    updateMetadataFields(next);
+    if (metadataMode === 'none') {
+      updateMetadataMode('custom');
+    }
+  };
+
   const onExport = async () => {
     if (!canExport) return;
     setLoading(true);
@@ -228,11 +316,7 @@ export function ExportDataModal<T>({
     const allRecords: Array<DataType> = [];
 
     for (const row of buildActiveRows()) {
-      const record = cloneSnapshotValue(row.record);
-      if (includeMetadata) {
-        record.metadata = cloneSnapshotValue(row.original);
-      }
-      allRecords.push(record);
+      allRecords.push(buildExportRecord(row));
       setCurrentProgress(allRecords.length);
     }
 
@@ -263,7 +347,10 @@ export function ExportDataModal<T>({
     setCurrentProgress(0);
     setTotalProgress(activeSourceRecords.length);
     try {
-      const activeRows = buildActiveRows();
+      const activeRows = buildActiveRows().map((row) => {
+        const record = buildExportRecord(row);
+        return { ...row, record };
+      });
       const job = exportCanonicalBundleZipWithWorker({
         rows: activeRows,
         options: {
@@ -271,7 +358,7 @@ export function ExportDataModal<T>({
           scope: exportScope,
           queryText: pinnedResultSetSnapshot?.queryText,
           sort: pinnedResultSetSnapshot?.sort,
-          includeOriginalMetadata: includeMetadata,
+          includeOriginalMetadata: false,
           compressionLevel: bundleCompressionLevel,
         },
         onProgress: (progress) => {
@@ -371,14 +458,144 @@ export function ExportDataModal<T>({
             </div>
           </div>
         ) : null}
-        <div class="flex items-center">
-          <p class="mr-2 leading-8">{t('Include all metadata:')}</p>
-          <input
-            type="checkbox"
-            class="checkbox checkbox-sm"
-            checked={includeMetadata}
-            onChange={toggleIncludeMetadata}
-          />
+        <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2">
+          <div class="mb-2 flex flex-wrap items-center gap-4">
+            <p class="font-semibold text-sm">{t('Export columns')}</p>
+            <label class="label cursor-pointer gap-2 py-0">
+              <input
+                type="radio"
+                name="export-column-mode"
+                class="radio radio-sm"
+                checked={columnMode === 'all'}
+                onChange={() => updateColumnMode('all')}
+              />
+              <span>{t('All')}</span>
+            </label>
+            <label class="label cursor-pointer gap-2 py-0">
+              <input
+                type="radio"
+                name="export-column-mode"
+                class="radio radio-sm"
+                checked={columnMode === 'custom'}
+                onChange={() => updateColumnMode('custom')}
+              />
+              <span>{t('Custom columns')}</span>
+            </label>
+            {columnMode === 'custom' ? (
+              <div class="ml-auto flex gap-2">
+                <button
+                  type="button"
+                  class="btn btn-xs"
+                  onClick={() =>
+                    updateColumnFields(exportColumnOptions.map((column) => column.key))
+                  }
+                >
+                  {t('Select all')}
+                </button>
+                <button type="button" class="btn btn-xs" onClick={() => updateColumnFields([])}>
+                  {t('Clear')}
+                </button>
+              </div>
+            ) : null}
+          </div>
+          {columnMode === 'custom' ? (
+            <div class="space-y-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                {exportColumnOptions.map((column) => (
+                  <label key={column.key} class="label cursor-pointer justify-start gap-2 py-0">
+                    <input
+                      type="checkbox"
+                      class="checkbox checkbox-xs"
+                      checked={selectedColumnFieldSet.has(column.key)}
+                      onChange={() => toggleColumnField(column.key)}
+                    />
+                    <span>{t(column.label as TranslationKey)}</span>
+                    <span class="font-mono opacity-60 break-all">{column.key}</span>
+                  </label>
+                ))}
+              </div>
+              <p class="text-xs opacity-60">
+                {columnFields.length} {t('columns selected')}
+              </p>
+            </div>
+          ) : null}
+        </div>
+        <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2">
+          <div class="mb-2 flex flex-wrap items-center gap-4">
+            <p class="font-semibold text-sm">{t('Metadata')}</p>
+            <label class="label cursor-pointer gap-2 py-0">
+              <input
+                type="radio"
+                name="export-metadata-mode"
+                class="radio radio-sm"
+                checked={metadataMode === 'none'}
+                onChange={() => updateMetadataMode('none')}
+              />
+              <span>{t('None')}</span>
+            </label>
+            <label class="label cursor-pointer gap-2 py-0">
+              <input
+                type="radio"
+                name="export-metadata-mode"
+                class="radio radio-sm"
+                checked={metadataMode === 'all'}
+                onChange={() => updateMetadataMode('all')}
+              />
+              <span>{t('All')}</span>
+            </label>
+            <label class="label cursor-pointer gap-2 py-0">
+              <input
+                type="radio"
+                name="export-metadata-mode"
+                class="radio radio-sm"
+                checked={metadataMode === 'custom'}
+                onChange={() => updateMetadataMode('custom')}
+              />
+              <span>{t('Custom fields')}</span>
+            </label>
+          </div>
+          {metadataMode === 'custom' ? (
+            <div class="space-y-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                {DEFAULT_METADATA_FIELDS.map((field) => (
+                  <label key={field} class="label cursor-pointer justify-start gap-2 py-0">
+                    <input
+                      type="checkbox"
+                      class="checkbox checkbox-xs"
+                      checked={selectedMetadataFieldSet.has(field)}
+                      onChange={() => toggleMetadataField(field)}
+                    />
+                    <span class="font-mono break-all">{field}</span>
+                  </label>
+                ))}
+              </div>
+              <label class="form-control">
+                <span class="label-text text-xs">{t('Additional metadata paths')}</span>
+                <textarea
+                  class="textarea textarea-bordered textarea-sm font-mono text-xs min-h-16"
+                  value={metadataFields
+                    .filter((field) => !DEFAULT_METADATA_FIELDS.includes(field as never))
+                    .join('\n')}
+                  placeholder="legacy.conversation_id_str\nviews.count"
+                  onInput={(e) => {
+                    const customFields = (e.currentTarget as HTMLTextAreaElement).value
+                      .split(/\r?\n|,/)
+                      .map((item) => item.trim())
+                      .filter(Boolean);
+                    updateMetadataFields([
+                      ...DEFAULT_METADATA_FIELDS.filter((field) =>
+                        selectedMetadataFieldSet.has(field),
+                      ),
+                      ...customFields,
+                    ]);
+                  }}
+                />
+              </label>
+              <p class="text-xs opacity-60">
+                {metadataFields.length} {t('metadata fields selected')}
+              </p>
+            </div>
+          ) : null}
         </div>
         <div class="flex">
           <p class="mr-2 leading-8">{t('Export as:')}</p>
