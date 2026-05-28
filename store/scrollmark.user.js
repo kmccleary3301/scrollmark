@@ -11293,6 +11293,10 @@
     "__bookmark_folder_name",
     "__bookmark_folder_url"
   ];
+  const UNSAFE_METADATA_PATH_PARTS = /* @__PURE__ */ new Set(["__proto__", "prototype", "constructor"]);
+  function isSafeMetadataFieldPath(path) {
+    return path.split(".").every((part) => part && !UNSAFE_METADATA_PATH_PARTS.has(part));
+  }
   function cloneSnapshotValue$1(value) {
     if (value === null || value === void 0 || typeof value !== "object") {
       return value;
@@ -11310,6 +11314,7 @@
     }
   }
   function getAccessorPathValue$2(record, path) {
+    if (!isSafeMetadataFieldPath(path)) return void 0;
     if (!record || typeof record !== "object") return void 0;
     const parts = path.split(".");
     let current = record;
@@ -11323,12 +11328,12 @@
     if (!Array.isArray(value)) return [];
     return Array.from(
       new Set(
-        value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+        value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(isSafeMetadataFieldPath)
       )
     );
   }
   function buildCustomMetadata(recordSource, fields) {
-    const metadata = {};
+    const metadata = /* @__PURE__ */ Object.create(null);
     for (const field of fields) {
       const value = getAccessorPathValue$2(recordSource, field);
       if (value !== void 0) {

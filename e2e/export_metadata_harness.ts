@@ -34,23 +34,33 @@ assert.equal(getAccessorPathValue(original, 'legacy.full_text'), 'hello world');
 assert.equal(getAccessorPathValue(original, 'core.user_results.result.legacy.name'), 'Scrollmark');
 assert.equal(getAccessorPathValue(original, 'legacy.missing'), undefined);
 
-assert.deepEqual(normalizeMetadataFields([' legacy.full_text ', '', 'legacy.full_text', 42]), [
-  'legacy.full_text',
-]);
-
 assert.deepEqual(
-  buildCustomMetadata(original, [
-    'rest_id',
+  normalizeMetadataFields([
+    ' legacy.full_text ',
+    '',
     'legacy.full_text',
-    'core.user_results.result.legacy.screen_name',
-    'missing.path',
+    '__proto__.polluted',
+    'constructor.prototype.polluted',
+    42,
   ]),
-  {
-    rest_id: 'tweet-1',
-    'legacy.full_text': 'hello world',
-    'core.user_results.result.legacy.screen_name': 'scrollmark',
-  },
+  ['legacy.full_text'],
 );
+
+assert.equal(getAccessorPathValue(original, '__proto__.polluted'), undefined);
+
+const customMetadata = buildCustomMetadata(original, [
+  'rest_id',
+  'legacy.full_text',
+  'core.user_results.result.legacy.screen_name',
+  'missing.path',
+  '__proto__.polluted',
+]);
+assert.deepEqual(Object.fromEntries(Object.entries(customMetadata)), {
+  rest_id: 'tweet-1',
+  'legacy.full_text': 'hello world',
+  'core.user_results.result.legacy.screen_name': 'scrollmark',
+});
+assert.equal(({} as Record<string, unknown>).polluted, undefined);
 
 const noneRecord: DataType = { id: 'tweet-1' };
 applyMetadataToRecord(noneRecord, original, 'none', ['legacy.full_text']);
@@ -58,12 +68,15 @@ assert.deepEqual(noneRecord, { id: 'tweet-1' });
 
 const customRecord: DataType = { id: 'tweet-1' };
 applyMetadataToRecord(customRecord, original, 'custom', ['legacy.full_text']);
-assert.deepEqual(customRecord, {
-  id: 'tweet-1',
-  metadata: {
-    'legacy.full_text': 'hello world',
+assert.deepEqual(
+  { ...customRecord, metadata: Object.fromEntries(Object.entries(customRecord.metadata)) },
+  {
+    id: 'tweet-1',
+    metadata: {
+      'legacy.full_text': 'hello world',
+    },
   },
-});
+);
 
 const allRecord: DataType = { id: 'tweet-1' };
 applyMetadataToRecord(allRecord, original, 'all', []);

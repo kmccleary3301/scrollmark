@@ -20,6 +20,12 @@ export const DEFAULT_METADATA_FIELDS = [
   '__bookmark_folder_url',
 ] as const;
 
+const UNSAFE_METADATA_PATH_PARTS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function isSafeMetadataFieldPath(path: string): boolean {
+  return path.split('.').every((part) => part && !UNSAFE_METADATA_PATH_PARTS.has(part));
+}
+
 export function cloneSnapshotValue<T>(value: T): T {
   if (value === null || value === undefined || typeof value !== 'object') {
     return value;
@@ -41,6 +47,7 @@ export function cloneSnapshotValue<T>(value: T): T {
 }
 
 export function getAccessorPathValue(record: unknown, path: string): unknown {
+  if (!isSafeMetadataFieldPath(path)) return undefined;
   if (!record || typeof record !== 'object') return undefined;
   const parts = path.split('.');
   let current: unknown = record;
@@ -58,13 +65,13 @@ export function normalizeMetadataFields(value: unknown): string[] {
       value
         .filter((item): item is string => typeof item === 'string')
         .map((item) => item.trim())
-        .filter(Boolean),
+        .filter(isSafeMetadataFieldPath),
     ),
   );
 }
 
 export function buildCustomMetadata(recordSource: unknown, fields: string[]): DataType {
-  const metadata: DataType = {};
+  const metadata = Object.create(null) as DataType;
   for (const field of fields) {
     const value = getAccessorPathValue(recordSource, field);
     if (value !== undefined) {
