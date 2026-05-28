@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { ColumnDef } from '@tanstack/table-core';
 import { Modal } from '@/components/common';
 import {
@@ -114,6 +114,23 @@ function getExportColumnOptions<T>(columns: ColumnDef<T>[]): ExportColumnOption[
     .filter((column) => !!column.key);
 }
 
+function sanitizeExportColumnFields(
+  fields: unknown,
+  availableColumns: ExportColumnOption[],
+): string[] {
+  const available = new Set(availableColumns.map((column) => column.key));
+  return normalizeExportColumnFields(fields).filter((field) => available.has(field));
+}
+
+function getInitialExportColumnFields(availableColumns: ExportColumnOption[]): string[] {
+  const storedFields = normalizeExportColumnFields(options.get('exportColumnFields', []));
+  const sanitizedFields = sanitizeExportColumnFields(storedFields, availableColumns);
+  if (storedFields.length > 0 && sanitizedFields.length === 0) {
+    return availableColumns.map((column) => column.key);
+  }
+  return sanitizedFields;
+}
+
 function filterRecordColumns(record: DataType, mode: ExportColumnMode, fields: string[]): DataType {
   if (mode === 'all') return record;
   const selected = new Set(fields);
@@ -193,12 +210,13 @@ export function ExportDataModal<T>({
   const [selectedFormat, setSelectedFormat] = useSignalState<ExportFormatType>(EXPORT_FORMAT.JSON);
   const [loading, setLoading] = useSignalState(false);
   const [bundleLoading, setBundleLoading] = useSignalState(false);
+  const exportColumnOptions = useMemo(() => getExportColumnOptions(columns), [columns]);
 
   const [columnMode, setColumnMode] = useSignalState<ExportColumnMode>(
     options.get('exportColumnMode', 'all') ?? 'all',
   );
   const [columnFields, setColumnFields] = useSignalState<string[]>(
-    normalizeExportColumnFields(options.get('exportColumnFields', [])),
+    getInitialExportColumnFields(exportColumnOptions),
   );
 
   const [metadataMode, setMetadataMode] = useSignalState<ExportMetadataMode>(
@@ -207,7 +225,6 @@ export function ExportDataModal<T>({
   const [metadataFields, setMetadataFields] = useSignalState<string[]>(
     normalizeMetadataFields(options.get('exportMetadataFields', [])),
   );
-  const exportColumnOptions = getExportColumnOptions(columns);
   const selectedColumnFieldSet = new Set(columnFields);
   const selectedMetadataFieldSet = new Set(metadataFields);
   const [currentProgress, setCurrentProgress] = useSignalState(0);
@@ -241,10 +258,13 @@ export function ExportDataModal<T>({
     );
     setCurrentProgress(0);
     setTotalProgress(0);
+    setColumnFields(getInitialExportColumnFields(exportColumnOptions));
   }, [
+    exportColumnOptions,
     resultSetSnapshot,
     selectedRecords,
     selectionMode,
+    setColumnFields,
     setCurrentProgress,
     setExportScope,
     setTotalProgress,
@@ -259,13 +279,15 @@ export function ExportDataModal<T>({
     activeSourceRecords.map((record, index) => snapshotExportRow(record, columns, index));
 
   const updateColumnMode = (mode: ExportColumnMode) => {
+    if (mode === 'custom' && columnFields.length === 0) {
+      updateColumnFields(exportColumnOptions.map((column) => column.key));
+    }
     setColumnMode(mode);
     options.set('exportColumnMode', mode);
   };
 
   const updateColumnFields = (fields: string[]) => {
-    const available = new Set(exportColumnOptions.map((column) => column.key));
-    const normalized = normalizeExportColumnFields(fields).filter((field) => available.has(field));
+    const normalized = sanitizeExportColumnFields(fields, exportColumnOptions);
     setColumnFields(normalized);
     options.set('exportColumnFields', normalized);
   };

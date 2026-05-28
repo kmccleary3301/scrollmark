@@ -11410,6 +11410,18 @@
       };
     }).filter((column) => !!column.key);
   }
+  function sanitizeExportColumnFields(fields, availableColumns) {
+    const available = new Set(availableColumns.map((column) => column.key));
+    return normalizeExportColumnFields(fields).filter((field) => available.has(field));
+  }
+  function getInitialExportColumnFields(availableColumns) {
+    const storedFields = normalizeExportColumnFields(appOptionsManager.get("exportColumnFields", []));
+    const sanitizedFields = sanitizeExportColumnFields(storedFields, availableColumns);
+    if (storedFields.length > 0 && sanitizedFields.length === 0) {
+      return availableColumns.map((column) => column.key);
+    }
+    return sanitizedFields;
+  }
   function filterRecordColumns(record, mode, fields) {
     if (mode === "all") return record;
     const selected = new Set(fields);
@@ -11463,11 +11475,12 @@
     const [selectedFormat, setSelectedFormat] = useSignalState(EXPORT_FORMAT.JSON);
     const [loading, setLoading] = useSignalState(false);
     const [bundleLoading, setBundleLoading] = useSignalState(false);
+    const exportColumnOptions = hooks.useMemo(() => getExportColumnOptions(columns2), [columns2]);
     const [columnMode, setColumnMode] = useSignalState(
       appOptionsManager.get("exportColumnMode", "all") ?? "all"
     );
     const [columnFields, setColumnFields] = useSignalState(
-      normalizeExportColumnFields(appOptionsManager.get("exportColumnFields", []))
+      getInitialExportColumnFields(exportColumnOptions)
     );
     const [metadataMode, setMetadataMode] = useSignalState(
       appOptionsManager.get("exportMetadataMode", "none") ?? "none"
@@ -11475,7 +11488,6 @@
     const [metadataFields, setMetadataFields] = useSignalState(
       normalizeMetadataFields(appOptionsManager.get("exportMetadataFields", []))
     );
-    const exportColumnOptions = getExportColumnOptions(columns2);
     const selectedColumnFieldSet = new Set(columnFields);
     const selectedMetadataFieldSet = new Set(metadataFields);
     const [currentProgress, setCurrentProgress] = useSignalState(0);
@@ -11506,10 +11518,13 @@
       );
       setCurrentProgress(0);
       setTotalProgress(0);
+      setColumnFields(getInitialExportColumnFields(exportColumnOptions));
     }, [
+      exportColumnOptions,
       resultSetSnapshot,
       selectedRecords,
       selectionMode,
+      setColumnFields,
       setCurrentProgress,
       setExportScope,
       setTotalProgress,
@@ -11520,12 +11535,14 @@
     const canExport = activeSourceRecords.length > 0 && !resultSetPreparing;
     const buildActiveRows = () => activeSourceRecords.map((record, index) => snapshotExportRow(record, columns2, index));
     const updateColumnMode = (mode) => {
+      if (mode === "custom" && columnFields.length === 0) {
+        updateColumnFields(exportColumnOptions.map((column) => column.key));
+      }
       setColumnMode(mode);
       appOptionsManager.set("exportColumnMode", mode);
     };
     const updateColumnFields = (fields) => {
-      const available = new Set(exportColumnOptions.map((column) => column.key));
-      const normalized = normalizeExportColumnFields(fields).filter((field) => available.has(field));
+      const normalized = sanitizeExportColumnFields(fields, exportColumnOptions);
       setColumnFields(normalized);
       appOptionsManager.set("exportColumnFields", normalized);
     };
