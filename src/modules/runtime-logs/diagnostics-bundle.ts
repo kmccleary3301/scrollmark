@@ -3,6 +3,7 @@ import { isDiagnosticCaptureEnabled, readDiagnosticBuffers } from '@/utils/diagn
 import { zipBlobFiles } from '@/utils/download';
 import { options } from '@/core/options';
 import { db } from '@/core/database';
+import { collectIndexedDbInventory } from '@/core/database/inventory';
 import { readPerfDiagnostics } from '@/core/perf/metrics';
 
 type DiagnosticsBuffers = {
@@ -91,6 +92,7 @@ export async function collectDiagnosticsBundle() {
       return [];
     }
   })();
+  const indexedDbInventory = await collectIndexedDbInventory();
 
   const rawEventsRecent = (() => {
     try {
@@ -141,6 +143,7 @@ export async function collectDiagnosticsBundle() {
   }
 
   const appOptionsSnapshot = {
+    dedicatedDbForAccounts: options.get('dedicatedDbForAccounts', false),
     directMessagesCaptureEnabled: options.get('directMessagesCaptureEnabled', false),
     rawCaptureEncryptedStorageReady: options.get('rawCaptureEncryptedStorageReady', false),
     rawCapturePolicyPublicEnabled: options.get('rawCapturePolicyPublicEnabled', true),
@@ -170,6 +173,7 @@ export async function collectDiagnosticsBundle() {
       logs: recentLogs.length,
     },
     indexeddb_names: dbNames,
+    indexeddb_inventory: indexedDbInventory,
     local_storage: storage,
     app_options: appOptionsSnapshot,
     raw_events_full: rawEventsFull,
