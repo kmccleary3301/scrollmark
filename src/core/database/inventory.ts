@@ -97,6 +97,15 @@ async function readDatabaseInventory(
   return await new Promise((resolve) => {
     const openReq = indexedDB.open(dbName);
 
+    openReq.onupgradeneeded = () => {
+      // Prevent creating a new empty DB when the name is stale/non-existent.
+      try {
+        openReq.transaction?.abort();
+      } catch {
+        // ignore
+      }
+    };
+
     openReq.onerror = () => {
       resolve({
         name: dbName,
