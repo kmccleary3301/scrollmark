@@ -731,15 +731,20 @@ export class DatabaseManager {
             this.buildTweetSearchDocuments(extName, existingRows),
           );
 
-          emitDatabaseMutation({
-            extension: extName,
-            operation: 'extAddTweetCaptureIds',
-            count: ids.length,
-            keys: ids,
-          });
-          void this.publishCaptureCountSnapshot(extName);
+          await this.bulkPutInChunks(
+            this.searchDocuments(),
+            this.buildTweetSearchDocuments(extName, existingRows),
+          );
         },
       );
+
+      emitDatabaseMutation({
+        extension: extName,
+        operation: 'extAddTweetCaptureIds',
+        count: ids.length,
+        keys: ids,
+      });
+      void this.publishCaptureCountSnapshot(extName);
     });
   }
 
