@@ -1411,7 +1411,7 @@ export class DatabaseManager {
     if (!rows.length) return;
     const startedAt = nowMs();
     return this.enqueueWrite('upsertSearchDocuments', async () => {
-      const result = await this.db.transaction('rw', this.searchDocuments(), async () => {
+      await this.db.transaction('rw', this.searchDocuments(), async () => {
         await this.bulkPutInChunks(this.searchDocuments(), rows);
       });
       recordPerfMetric({
@@ -1420,7 +1420,6 @@ export class DatabaseManager {
         durationMs: nowMs() - startedAt,
         value: rows.length,
       });
-      return result;
     });
   }
 
