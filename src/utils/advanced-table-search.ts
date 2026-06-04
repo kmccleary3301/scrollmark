@@ -1321,9 +1321,10 @@ function buildIndexedCandidateSet<T>(
     candidateSet = intersectDocSets(candidateSet, indexed);
   }
 
-  const anchorCandidates =
-    buildAdjacentTermAnchorCandidates(prepared, parsed) ||
-    buildRareTermAnchorCandidates(prepared, parsed);
+  const anchorCandidates = parsed.negativeLexicalTokens.length
+    ? null
+    : buildAdjacentTermAnchorCandidates(prepared, parsed) ||
+      buildRareTermAnchorCandidates(prepared, parsed);
   const lexicalTokens = parsed.positiveLexicalTokens.filter((token) => !token.field);
   const lexicalTermCandidates =
     anchorCandidates ||

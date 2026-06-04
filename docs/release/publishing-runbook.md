@@ -7,7 +7,7 @@ This runbook covers the release path for GitHub Releases and userscript marketpl
 | Artifact                                       | Audience                          | Notes                                                                                         |
 | ---------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------- |
 | `dist/scrollmark.user.js`                      | Direct GitHub install/update URL  | Includes GitHub Release `@downloadURL` and `@updateURL`.                                      |
-| `dist/scrollmark.store.user.js`                | Greasy Fork/OpenUserJS submission | Same runtime code, but omits `@downloadURL` and `@updateURL` so the store can manage updates. |
+| `dist/scrollmark.store.user.js`                | Greasy Fork/OpenUserJS submission | Same runtime code, but omits `@downloadURL`, `@updateURL`, and external `@require` URLs so the store can manage updates without userscript-manager dependency injection failures. |
 | `store/scrollmark.user.js`                     | Marketplace GitHub sync target    | Stable repo path copied from `dist/scrollmark.store.user.js` during `npm run build:all`.      |
 | `dist/twitter-web-exporter-e2e.user.js`        | Local Firefox/e2e QC only         | Uses localhost install/update URL. Do not publish.                                            |
 | `dist/twitter-web-exporter-chrome-e2e.user.js` | Local Chrome/e2e QC only          | Uses localhost install/update URL. Do not publish.                                            |
@@ -30,6 +30,8 @@ npm run lint
 npm run build:all
 npm run check:metadata
 ```
+
+For releases that include the DB-backed table rewrite, also follow the DB-backed table rewrite gates in `docs/release/final-release-checklist.md`.
 
 Expected production outputs:
 
@@ -83,7 +85,7 @@ Recommended flow:
 2. Paste/upload `dist/scrollmark.store.user.js`.
 3. Use the listing copy from `docs/release/store-listing-draft.md`.
 4. Add current screenshots from `docs/screenshots/`.
-5. Confirm the store does not reject external `@require` URLs.
+5. Confirm the bundled store artifact installs without external dependency warnings.
 6. If the store accepts GitHub sync for this script, point it at:
 
 ```text
@@ -120,3 +122,4 @@ Do not submit local e2e artifacts.
 - Verify the store-hosted install is managed by the store and does not point back to localhost or e2e paths.
 - Open Bookmarks, search, Bundle Viewer, Export Data, and Export Media.
 - Export a small canonical bundle and re-import it into Bundle Viewer.
+- For the DB-backed table rewrite, confirm Bookmarks opens without full search-document hydration, folder filtering stays responsive, Export Data streams from the active source, and Media view renders incrementally.

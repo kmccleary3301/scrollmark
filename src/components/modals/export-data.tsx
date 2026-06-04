@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { ColumnDef } from '@tanstack/table-core';
 import { Modal } from '@/components/common';
 import {
@@ -6,9 +6,16 @@ import {
   type BundleExportWorkerJob,
 } from '@/core/bundles/export-worker-client';
 import { TranslationKey, useTranslation } from '@/i18n';
-import { ResultSetSnapshot } from '@/utils/result-set';
+import { nowMs, recordPerfMetric } from '@/core/perf/metrics';
+import { extractStableRecordId, ResultSetSnapshot } from '@/utils/result-set';
 import { useSignalState, cx, useToggle } from '@/utils/common';
-import { DataType, EXPORT_FORMAT, ExportFormatType, exportData } from '@/utils/exporter';
+import {
+  DataType,
+  EXPORT_FORMAT,
+  ExportFormatType,
+  exportData,
+  exportDataFromAsyncRows,
+} from '@/utils/exporter';
 
 type ExportScopeType = 'selected' | 'result_set';
 
@@ -23,6 +30,11 @@ type ExportDataModalProps<T> = {
   columns: ColumnDef<T>[];
   resultRecords: T[];
   selectedRecords: T[];
+  selectedRecordCount?: number;
+  selectionExcludedRecordIds?: string[];
+  resultCount?: number;
+  streamResultRecords?: () => AsyncIterable<T>;
+  streamSelectedRecords?: () => AsyncIterable<T>;
   resultSetSnapshot: ResultSetSnapshot;
   selectionMode: 'all' | 'explicit';
   preparingFullDataset?: boolean;
@@ -144,7 +156,7 @@ function snapshotExportRow<T>(
   }
 
   return {
-    id: String((originalRecord as Record<string, unknown>)?.rest_id || rowIndex),
+    id: extractStableRecordId(originalRecord, rowIndex),
     original: cloneSnapshotValue(recordSource),
     record,
   };
@@ -158,6 +170,11 @@ export function ExportDataModal<T>({
   columns,
   resultRecords,
   selectedRecords,
+  selectedRecordCount,
+  selectionExcludedRecordIds = [],
+  resultCount,
+  streamResultRecords,
+  streamSelectedRecords,
   resultSetSnapshot,
   selectionMode,
   preparingFullDataset = false,
@@ -180,6 +197,9 @@ export function ExportDataModal<T>({
   );
   const wasOpenRef = useRef(false);
   const bundleJobRef = useRef<BundleExportWorkerJob | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
+  const bundleAbortRef = useRef<AbortController | null>(null);
+  const exportCancelReportedRef = useRef(false);
 
   useEffect(() => {
     if (!show) {
@@ -212,31 +232,100 @@ export function ExportDataModal<T>({
     show,
   ]);
 
+  const resultSetRawCount =
+    resultCount ?? pinnedResultSetSnapshot?.totalMatches ?? resultRecords.length;
+  const excludedRecordIdSet = useMemo(
+    () => new Set(selectionMode === 'all' ? selectionExcludedRecordIds : []),
+    [selectionExcludedRecordIds, selectionMode],
+  );
+  const resultSetExcludedCount =
+    selectionMode === 'all' ? Math.min(excludedRecordIdSet.size, resultSetRawCount) : 0;
+  const resultSetCount = Math.max(0, resultSetRawCount - resultSetExcludedCount);
+  const selectedCount = selectedRecordCount ?? selectedRecords.length;
   const activeSourceRecords = exportScope === 'selected' ? selectedRecords : resultRecords;
+  const activeSourceCount = exportScope === 'selected' ? selectedCount : resultSetCount;
+  const canStreamResultSet = exportScope === 'result_set' && Boolean(streamResultRecords);
+  const canStreamSelected = exportScope === 'selected' && Boolean(streamSelectedRecords);
+  const canStreamActiveScope = canStreamResultSet || canStreamSelected;
   const resultSetPreparing = preparingFullDataset && exportScope === 'result_set';
-  const canExport = activeSourceRecords.length > 0 && !resultSetPreparing;
+  const canExport = activeSourceCount > 0 && !resultSetPreparing;
 
-  const buildActiveRows = () =>
-    activeSourceRecords.map((record, index) => snapshotExportRow(record, columns, index));
+  const shouldSkipResultSetRow = (rowId: string) =>
+    exportScope === 'result_set' && excludedRecordIdSet.has(rowId);
 
-  const onExport = async () => {
-    if (!canExport) return;
-    setLoading(true);
-    setCurrentProgress(0);
-    setTotalProgress(activeSourceRecords.length);
+  const buildActiveRows = () => {
+    const rows: Array<ExportRowSnapshot<T>> = [];
+    activeSourceRecords.forEach((record, index) => {
+      const row = snapshotExportRow(record, columns, index);
+      if (shouldSkipResultSetRow(row.id)) {
+        return;
+      }
+      rows.push(row);
+    });
+    return rows;
+  };
 
-    const allRecords: Array<DataType> = [];
+  async function* streamActiveExportRecords(): AsyncIterable<DataType> {
+    if (canStreamResultSet && streamResultRecords) {
+      let index = 0;
+      for await (const record of streamResultRecords()) {
+        const row = snapshotExportRow(record, columns, index);
+        index += 1;
+        if (shouldSkipResultSetRow(row.id)) {
+          continue;
+        }
+        const exportRecord = cloneSnapshotValue(row.record);
+        if (includeMetadata) {
+          exportRecord.metadata = cloneSnapshotValue(row.original);
+        }
+        yield exportRecord;
+      }
+      return;
+    }
+    if (canStreamSelected && streamSelectedRecords) {
+      let index = 0;
+      for await (const record of streamSelectedRecords()) {
+        const row = snapshotExportRow(record, columns, index);
+        index += 1;
+        const exportRecord = cloneSnapshotValue(row.record);
+        if (includeMetadata) {
+          exportRecord.metadata = cloneSnapshotValue(row.original);
+        }
+        yield exportRecord;
+      }
+      return;
+    }
 
     for (const row of buildActiveRows()) {
       const record = cloneSnapshotValue(row.record);
       if (includeMetadata) {
         record.metadata = cloneSnapshotValue(row.original);
       }
-      allRecords.push(record);
-      setCurrentProgress(allRecords.length);
+      yield record;
     }
+  }
 
-    // Prepare header translations for the exported data.
+  const onExport = async () => {
+    if (!canExport) return;
+    const abortController = new AbortController();
+    const startedAt = nowMs();
+    exportCancelReportedRef.current = false;
+    exportAbortRef.current = abortController;
+    setLoading(true);
+    setCurrentProgress(0);
+    setTotalProgress(activeSourceCount);
+    recordPerfMetric({
+      kind: 'export',
+      name: 'modal-export-start',
+      value: activeSourceCount,
+      tags: {
+        scope: exportScope,
+        format: selectedFormat,
+        streaming: canStreamActiveScope,
+        excluded: resultSetExcludedCount,
+      },
+    });
+
     const headerTranslations = flattenLeafColumns(columns).reduce<Record<string, string>>(
       (acc, column) => {
         const key = column.meta?.exportKey || resolveColumnId(column);
@@ -247,6 +336,77 @@ export function ExportDataModal<T>({
       {},
     );
 
+    if (canStreamActiveScope) {
+      await exportDataFromAsyncRows(
+        streamActiveExportRecords(),
+        selectedFormat,
+        `twitter-${title}-${exportScope === 'selected' ? 'selected' : 'results'}-${Date.now()}.${selectedFormat.toLowerCase()}`,
+        headerTranslations,
+        {
+          onProgress: setCurrentProgress,
+          signal: abortController.signal,
+        },
+      );
+      exportAbortRef.current = null;
+      setLoading(false);
+      if (abortController.signal.aborted) {
+        if (!exportCancelReportedRef.current) {
+          recordPerfMetric({
+            kind: 'export',
+            name: 'modal-export-cancel',
+            durationMs: nowMs() - startedAt,
+            value: currentProgress,
+            tags: {
+              scope: exportScope,
+              format: selectedFormat,
+              streaming: true,
+              excluded: resultSetExcludedCount,
+            },
+          });
+        }
+        return;
+      }
+      recordPerfMetric({
+        kind: 'export',
+        name: 'modal-export-complete',
+        durationMs: nowMs() - startedAt,
+        value: activeSourceCount,
+        tags: {
+          scope: exportScope,
+          format: selectedFormat,
+          streaming: true,
+          excluded: resultSetExcludedCount,
+        },
+      });
+      return;
+    }
+
+    const allRecords: Array<DataType> = [];
+
+    for (const row of buildActiveRows()) {
+      if (abortController.signal.aborted) {
+        exportAbortRef.current = null;
+        setLoading(false);
+        return;
+      }
+      const record = cloneSnapshotValue(row.record);
+      if (includeMetadata) {
+        record.metadata = cloneSnapshotValue(row.original);
+      }
+      allRecords.push(record);
+      setCurrentProgress(allRecords.length);
+    }
+    recordPerfMetric({
+      kind: 'export',
+      name: 'modal-array-export-rows',
+      value: allRecords.length,
+      tags: {
+        scope: exportScope,
+        format: selectedFormat,
+        excluded: resultSetExcludedCount,
+      },
+    });
+
     // Convert data to selected format and download it.
     await exportData(
       allRecords,
@@ -254,18 +414,69 @@ export function ExportDataModal<T>({
       `twitter-${title}-${exportScope === 'selected' ? 'selected' : 'results'}-${Date.now()}.${selectedFormat.toLowerCase()}`,
       headerTranslations,
     );
+    exportAbortRef.current = null;
     setLoading(false);
+    recordPerfMetric({
+      kind: 'export',
+      name: 'modal-export-complete',
+      durationMs: nowMs() - startedAt,
+      value: allRecords.length,
+      tags: {
+        scope: exportScope,
+        format: selectedFormat,
+        streaming: false,
+        excluded: resultSetExcludedCount,
+      },
+    });
   };
+
+  async function* streamActiveBundleRows(signal: AbortSignal): AsyncIterable<ExportRowSnapshot<T>> {
+    if (canStreamResultSet && streamResultRecords) {
+      let index = 0;
+      for await (const record of streamResultRecords()) {
+        if (signal.aborted) {
+          return;
+        }
+        const row = snapshotExportRow(record, columns, index);
+        index += 1;
+        if (shouldSkipResultSetRow(row.id)) {
+          continue;
+        }
+        yield row;
+      }
+      return;
+    }
+    if (canStreamSelected && streamSelectedRecords) {
+      let index = 0;
+      for await (const record of streamSelectedRecords()) {
+        if (signal.aborted) {
+          return;
+        }
+        yield snapshotExportRow(record, columns, index);
+        index += 1;
+      }
+      return;
+    }
+
+    for (const row of buildActiveRows()) {
+      if (signal.aborted) {
+        return;
+      }
+      yield row;
+    }
+  }
 
   const onExportBundle = async () => {
     if (!canExport) return;
+    const abortController = new AbortController();
+    bundleAbortRef.current = abortController;
     setBundleLoading(true);
     setCurrentProgress(0);
-    setTotalProgress(activeSourceRecords.length);
+    setTotalProgress(activeSourceCount);
     try {
-      const activeRows = buildActiveRows();
       const job = exportCanonicalBundleZipWithWorker({
-        rows: activeRows,
+        rows: streamActiveBundleRows(abortController.signal),
+        totalRecords: activeSourceCount,
         options: {
           title,
           scope: exportScope,
@@ -281,7 +492,8 @@ export function ExportDataModal<T>({
       });
       bundleJobRef.current = job;
       await job.promise;
-      setCurrentProgress(activeSourceRecords.length);
+      if (abortController.signal.aborted) return;
+      setCurrentProgress(activeSourceCount);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/cancelled/i.test(message)) {
@@ -289,14 +501,34 @@ export function ExportDataModal<T>({
       }
     } finally {
       bundleJobRef.current = null;
+      bundleAbortRef.current = null;
       setBundleLoading(false);
     }
   };
 
   const onCancel = () => {
+    if (loading) {
+      exportAbortRef.current?.abort();
+      exportCancelReportedRef.current = true;
+      recordPerfMetric({
+        kind: 'export',
+        name: 'modal-export-cancel',
+        value: currentProgress,
+        tags: {
+          scope: exportScope,
+          format: selectedFormat,
+          streaming: canStreamActiveScope,
+        },
+      });
+      exportAbortRef.current = null;
+      setLoading(false);
+      return;
+    }
     if (bundleLoading) {
+      bundleAbortRef.current?.abort();
       bundleJobRef.current?.cancel();
       bundleJobRef.current = null;
+      bundleAbortRef.current = null;
       setBundleLoading(false);
       return;
     }
@@ -321,7 +553,7 @@ export function ExportDataModal<T>({
         <div class="flex items-center">
           <p class="mr-2 leading-8">{t('Data length:')}</p>
           <span class="font-mono leading-6 h-6 bg-base-200 px-2 rounded-md">
-            {activeSourceRecords.length}
+            {activeSourceCount}
           </span>
           {resultSetPreparing ? (
             <span class="ml-2 inline-flex items-center gap-1 text-xs opacity-70">
@@ -341,21 +573,19 @@ export function ExportDataModal<T>({
               onChange={() => setExportScope('result_set')}
             />
             <span>{t('All current results')}</span>
-            <span class="font-mono opacity-60">({resultRecords.length})</span>
+            <span class="font-mono opacity-60">({resultSetCount})</span>
           </label>
-          <label
-            class={cx('label cursor-pointer gap-2 py-0', !selectedRecords.length && 'opacity-50')}
-          >
+          <label class={cx('label cursor-pointer gap-2 py-0', selectedCount <= 0 && 'opacity-50')}>
             <input
               type="radio"
               name="export-scope"
               class="radio radio-sm"
               checked={exportScope === 'selected'}
-              disabled={!selectedRecords.length}
+              disabled={selectedCount <= 0}
               onChange={() => setExportScope('selected')}
             />
             <span>{t('Selected rows')}</span>
-            <span class="font-mono opacity-60">({selectedRecords.length})</span>
+            <span class="font-mono opacity-60">({selectedCount})</span>
           </label>
         </div>
         {pinnedResultSetSnapshot ? (
@@ -409,7 +639,7 @@ export function ExportDataModal<T>({
             <option value="6">Smaller / slower</option>
           </select>
         </div>
-        {activeSourceRecords.length > 0 ? null : (
+        {activeSourceCount > 0 ? null : (
           <div class="flex items-center justify-center h-28 w-full">
             <p class="text-base-content text-opacity-50">{t('No data selected.')}</p>
           </div>
@@ -422,7 +652,7 @@ export function ExportDataModal<T>({
             max="100"
           />
           <span class="text-sm leading-none mt-2 text-base-content text-opacity-60">
-            {`${currentProgress}/${activeSourceRecords.length}`}
+            {`${currentProgress}/${activeSourceCount}`}
           </span>
         </div>
       </div>
@@ -430,7 +660,7 @@ export function ExportDataModal<T>({
       <div class="flex space-x-2">
         <span class="flex-grow" />
         <button class="btn" onClick={onCancel}>
-          {bundleLoading ? 'Cancel Export' : t('Cancel')}
+          {bundleLoading || loading ? 'Cancel Export' : t('Cancel')}
         </button>
         <button
           class={cx('btn btn-secondary', (bundleLoading || !canExport) && 'btn-disabled')}

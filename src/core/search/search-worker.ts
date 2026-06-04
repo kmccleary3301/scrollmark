@@ -13,6 +13,7 @@ type SearchCorpus = {
 };
 
 const corpora = new Map<string, SearchCorpus>();
+const pendingCorpora = new Map<string, SearchWorkerRecord[]>();
 const cancelledRequests = new Set<string>();
 
 function post(message: SearchWorkerResponse): void {
@@ -48,8 +49,10 @@ self.onmessage = (event: MessageEvent<SearchWorkerRequest>) => {
   if (request.type === 'search:dispose') {
     if (request.scopeKey) {
       corpora.delete(request.scopeKey);
+      pendingCorpora.delete(request.scopeKey);
     } else {
       corpora.clear();
+      pendingCorpora.clear();
     }
     cancelledRequests.delete(request.requestId);
     return;
@@ -59,6 +62,62 @@ self.onmessage = (event: MessageEvent<SearchWorkerRequest>) => {
   try {
     if (request.type === 'search:set-corpus') {
       const corpus = buildCorpus(request.scopeKey, request.records || []);
+      corpora.set(request.scopeKey, corpus);
+      post({
+        type: 'search:corpus-ready',
+        requestId: request.requestId,
+        scopeKey: request.scopeKey,
+        corpusSize: corpus.rows.length,
+        elapsedMs: nowMs() - start,
+      });
+      return;
+    }
+
+    if (request.type === 'search:begin-corpus') {
+      if (cancelledRequests.has(request.requestId)) {
+        pendingCorpora.delete(request.scopeKey);
+        cancelledRequests.delete(request.requestId);
+        return;
+      }
+      corpora.delete(request.scopeKey);
+      pendingCorpora.set(request.scopeKey, []);
+      return;
+    }
+
+    if (request.type === 'search:append-corpus') {
+      if (cancelledRequests.has(request.requestId)) {
+        pendingCorpora.delete(request.scopeKey);
+        cancelledRequests.delete(request.requestId);
+        return;
+      }
+      const rows = pendingCorpora.get(request.scopeKey);
+      if (!rows) {
+        pendingCorpora.set(request.scopeKey, [...(request.records || [])]);
+        return;
+      }
+      rows.push(...(request.records || []));
+      return;
+    }
+
+    if (request.type === 'search:commit-corpus') {
+      if (cancelledRequests.has(request.requestId)) {
+        pendingCorpora.delete(request.scopeKey);
+        cancelledRequests.delete(request.requestId);
+        return;
+      }
+      const rows = pendingCorpora.get(request.scopeKey);
+      if (!rows) {
+        post({
+          type: 'search:error',
+          requestId: request.requestId,
+          scopeKey: request.scopeKey,
+          error: `Search corpus chunks not ready for scope: ${request.scopeKey}`,
+          elapsedMs: nowMs() - start,
+        });
+        return;
+      }
+      pendingCorpora.delete(request.scopeKey);
+      const corpus = buildCorpus(request.scopeKey, rows);
       corpora.set(request.scopeKey, corpus);
       post({
         type: 'search:corpus-ready',

@@ -5,6 +5,7 @@ import type { ExtensionConstructor } from './core/extensions';
 import { getExtensionManager } from './core/extensions';
 import { options } from './core/options';
 import { initializePerformanceMonitoring } from './core/perf/metrics';
+import { installSyntheticDatabaseTools } from './core/database/synthetic-fixtures';
 
 import BookmarksModule from './modules/bookmarks';
 import CommunityMembersModule from './modules/community-members';
@@ -138,6 +139,7 @@ function mountApp() {
 function bootstrap() {
   installUserscriptErrorGuard();
   initializePerformanceMonitoring();
+  installSyntheticDatabaseTools();
 
   try {
     const manager = getExtensionManager();

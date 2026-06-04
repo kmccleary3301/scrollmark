@@ -1,14 +1,20 @@
 import { ComponentType, JSX } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
 import { Modal, MultiSelect } from '@/components/common';
 import { useTranslation } from '@/i18n';
-import { extractStableRecordId, ResultSetSnapshot } from '@/utils/result-set';
+import {
+  extractHydrationRecordId,
+  extractStableRecordId,
+  ResultSetSnapshot,
+} from '@/utils/result-set';
 import { SEARCH_OPERATOR_HELP_ENTRIES } from '@/utils/search-query';
 import { appendSearchHistoryEntry, readSearchHistory } from '@/utils/search-history';
 import { useSignalState, useToggle } from '@/utils/common';
 import { nowMs, recordPerfMetric } from '@/core/perf/metrics';
 import type { SearchDocumentRow } from '@/core/database/manager';
+import type { ResultEntityType, ResultSourceDescriptor } from '@/core/database/result-source';
+import { createExplicitSelectionResultSource } from '@/core/database/id-result-sources';
 import { flexRender, useReactTable } from '@/utils/react-table';
 import {
   IconInfoCircle,
@@ -21,14 +27,7 @@ import {
   IconTable,
   IconX,
 } from '@tabler/icons-preact';
-import {
-  ColumnDef,
-  getCoreRowModel,
-  RowSelectionState,
-  Row,
-  RowData,
-  Table,
-} from '@tanstack/table-core';
+import { ColumnDef, getCoreRowModel, Row, RowData, Table } from '@tanstack/table-core';
 
 import { ExportDataModal } from '../modals/export-data';
 import { useResultSetController } from './use-result-set-controller';
@@ -39,6 +38,8 @@ const VIEWER_PREFETCH_VIEWPORTS = 4;
 const VIRTUAL_OVERSCAN_PX = 1600;
 const VIRTUAL_MAX_WINDOW_ROWS = 90;
 const VIRTUAL_SCROLL_UPDATE_PX = 24;
+const ROW_HEIGHT_CACHE_LIMIT = 2500;
+const LARGE_ALTERNATE_VIEW_SOURCE_THRESHOLD = 10_000;
 const HIGHLIGHT_ATTRIBUTE = 'data-twe-highlight-v1';
 const CSS_HIGHLIGHT_PREFIX = 'scrollmark-table-search-';
 
@@ -48,6 +49,10 @@ type CssHighlightRegistry = {
 };
 
 type CssHighlightConstructor = new (...ranges: Range[]) => unknown;
+type RowHeightCacheEntry = {
+  height: number;
+  touchedAt: number;
+};
 
 const cssHighlightNamesByRoot = new WeakMap<HTMLElement, string>();
 let cssHighlightId = 0;
@@ -87,11 +92,34 @@ type BaseTableViewProps<T> = {
   loadedCount?: number;
   totalCount?: number;
   hasMore?: boolean;
+  sourceMode?: boolean;
+  sourceModeFiltersActive?: boolean;
+  sourceWindowStartIndex?: number;
+  resultSourceDescriptor?: ResultSourceDescriptor;
+  resultEntityType?: ResultEntityType;
+  onSourceWindowChange?: (startIndex: number, endIndex: number) => void;
+  streamSourceRows?: () => AsyncIterable<T>;
+  streamMediaRows?: () => AsyncIterable<T>;
+  mediaSourceTotalCount?: number;
+  onBookmarkFolderSelectionChange?: (folderIds: string[]) => void;
   loadMore?: () => Promise<void>;
   loadAll?: () => Promise<void>;
   hydrateRecordsByIds?: (ids: string[]) => Promise<T[]>;
   records: T[];
   searchDocuments?: SearchDocumentRow[];
+  searchDocumentsLoading?: boolean;
+  searchDocumentsLoaded?: boolean;
+  searchDocumentTotalCount?: number;
+  searchDocumentsBlockedReason?: string;
+  loadSearchDocuments?: () => Promise<SearchDocumentRow[]>;
+  loadSearchDocumentChunks?: (args: {
+    chunkSize?: number;
+    isCancelled?: () => boolean;
+    onChunk: (
+      documents: SearchDocumentRow[],
+      progress: { loaded: number; totalCount: number },
+    ) => void;
+  }) => Promise<{ loaded: number; totalCount: number; cancelled: boolean }>;
   columns: ColumnDef<T>[];
   clear: () => void;
   showClearButton?: boolean;
@@ -116,6 +144,7 @@ export type BaseTableRenderContext<T> = {
   resultRecords: T[];
   selectedRecords: T[];
   selectionMode: 'all' | 'explicit';
+  selectionExcludedRecordIds: string[];
 };
 
 export type BaseTableAlternateViewProps<T> = {
@@ -124,12 +153,31 @@ export type BaseTableAlternateViewProps<T> = {
   onOpenMedia: (url: string) => void;
   storageKey?: string;
   fullscreen?: boolean;
+  sourceMode?: boolean;
+  sourceTotalCount?: number;
+  streamSourceRows?: () => AsyncIterable<T>;
+  streamMediaRows?: () => AsyncIterable<T>;
+  mediaSourceTotalCount?: number;
+  onDiagnosticsChange?: (diagnostics: BaseTableAlternateViewDiagnostics | null) => void;
+};
+
+export type BaseTableDiagnosticDetail = {
+  key: string;
+  label: string;
+  minWidth?: 'sm' | 'md' | 'lg' | 'xl';
+};
+
+export type BaseTableAlternateViewDiagnostics = {
+  primary: string;
+  details?: BaseTableDiagnosticDetail[];
+  actions?: JSX.Element;
 };
 
 export type BaseTableAlternateView<T> = {
   id: string;
   label: string;
   icon: 'table' | 'grid';
+  sourceBacked?: boolean;
   component: ComponentType<BaseTableAlternateViewProps<T>>;
 };
 
@@ -184,6 +232,20 @@ function getCssHighlightName(root: HTMLElement): string {
   cssHighlightNamesByRoot.set(root, name);
   ensureCssHighlightStyle(name);
   return name;
+}
+
+function diagnosticVisibilityClass(minWidth: BaseTableDiagnosticDetail['minWidth'] = 'sm'): string {
+  switch (minWidth) {
+    case 'md':
+      return 'hidden md:inline';
+    case 'lg':
+      return 'hidden lg:inline';
+    case 'xl':
+      return 'hidden xl:inline';
+    case 'sm':
+    default:
+      return 'hidden sm:inline';
+  }
 }
 
 function ensureCssHighlightStyle(name: string) {
@@ -290,6 +352,16 @@ function findVirtualIndexForOffset(offsets: number[], offset: number): number {
   return Math.max(0, Math.min(offsets.length - 2, low));
 }
 
+function trimRowHeightCache(cache: Map<string, RowHeightCacheEntry>) {
+  if (cache.size <= ROW_HEIGHT_CACHE_LIMIT) return;
+  const staleEntries = [...cache.entries()].sort(
+    (left, right) => left[1].touchedAt - right[1].touchedAt,
+  );
+  for (const [key] of staleEntries.slice(0, cache.size - ROW_HEIGHT_CACHE_LIMIT)) {
+    cache.delete(key);
+  }
+}
+
 /**
  * Basic table view.
  */
@@ -304,11 +376,27 @@ export function BaseTableView<T>({
   loadedCount = 0,
   totalCount = 0,
   hasMore = false,
+  sourceMode = false,
+  sourceModeFiltersActive = false,
+  sourceWindowStartIndex = 0,
+  resultSourceDescriptor,
+  resultEntityType,
+  onSourceWindowChange,
+  streamSourceRows,
+  streamMediaRows,
+  mediaSourceTotalCount,
+  onBookmarkFolderSelectionChange,
   loadMore,
   loadAll,
   hydrateRecordsByIds,
   records,
   searchDocuments,
+  searchDocumentsLoading,
+  searchDocumentsLoaded,
+  searchDocumentTotalCount,
+  searchDocumentsBlockedReason,
+  loadSearchDocuments,
+  loadSearchDocumentChunks,
   columns,
   clear,
   showClearButton = true,
@@ -320,6 +408,8 @@ export function BaseTableView<T>({
   const { t } = useTranslation();
   const openedAtRef = useRef(nowMs());
   const firstRowsReportedRef = useRef(false);
+  const firstInteractiveReportedRef = useRef(false);
+  const firstStableLayoutReportedRef = useRef(false);
 
   // Control modal visibility for previewing media and JSON data.
   const [mediaPreview, setMediaPreview] = useSignalState('');
@@ -335,19 +425,24 @@ export function BaseTableView<T>({
     selectedFolders,
     setSelectedFolders,
     rowSelection,
+    setRowSelection,
     sorting,
     setSorting,
     selectionMode,
+    setSelectionMode,
     isFullscreen,
     setIsFullscreen,
     activeViewId,
     setActiveViewId,
     searchResult,
     searchPending,
+    searchReadinessState,
     sortedRecords,
     currentResultIds,
     handleRowSelectionChange,
     selectedRecords,
+    selectedRecordIds,
+    streamSearchResultRows,
     resultSetSnapshot,
     resolvedViewStateKey,
   } = useResultSetController({
@@ -359,7 +454,17 @@ export function BaseTableView<T>({
     columns,
     alternateViews,
     searchDocuments,
+    searchDocumentsLoading,
+    searchDocumentsLoaded,
+    searchDocumentTotalCount,
+    searchDocumentsBlockedReason,
+    loadSearchDocuments,
+    loadSearchDocumentChunks,
     hydrateRecordsByIds,
+    folderScopeSourceBacked: sourceModeFiltersActive,
+    resultSourceDescriptor,
+    resultEntityType,
+    resultSourceTotalCount: totalCount,
   });
 
   const operatorHelpGroups = useMemo(() => {
@@ -375,13 +480,63 @@ export function BaseTableView<T>({
     () => alternateViews?.find((view) => view.id === activeViewId) ?? null,
     [activeViewId, alternateViews],
   );
+  const tableTelemetryActive = !activeAlternateView;
+  const [alternateDiagnostics, setAlternateDiagnostics] =
+    useState<BaseTableAlternateViewDiagnostics | null>(null);
+  const handleAlternateDiagnosticsChange = useCallback(
+    (diagnostics: BaseTableAlternateViewDiagnostics | null) => {
+      setAlternateDiagnostics(diagnostics);
+    },
+    [],
+  );
+  useEffect(() => {
+    setAlternateDiagnostics(null);
+  }, [activeAlternateView?.id]);
+  const activeAlternateViewBlocked =
+    Boolean(activeAlternateView) &&
+    sourceMode &&
+    totalCount > LARGE_ALTERNATE_VIEW_SOURCE_THRESHOLD &&
+    activeAlternateView?.sourceBacked !== true &&
+    !normalizedSearchQuery;
+  const handleBookmarkFolderSelectionChange = (folderIds: string[]) => {
+    onBookmarkFolderSelectionChange?.(folderIds);
+    setSelectedFolders(folderIds);
+  };
+
+  useEffect(() => {
+    onBookmarkFolderSelectionChange?.(selectedFolders);
+  }, [onBookmarkFolderSelectionChange, selectedFolders]);
+  const metricTags = useMemo(
+    () => ({
+      title,
+      viewStateKey: viewStateKey || '',
+      resolvedViewStateKey,
+      activeViewId,
+      fullscreen: isFullscreen,
+    }),
+    [activeViewId, isFullscreen, resolvedViewStateKey, title, viewStateKey],
+  );
+
+  useEffect(() => {
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-open-start',
+      value: totalCount,
+      tags: {
+        ...metricTags,
+        loadedCount,
+        totalCount,
+        searchDocuments: searchDocuments?.length ?? 0,
+      },
+    });
+  }, []);
 
   // Infinite scrolling batch renderer.
   const scrollAreaRef = useRef<HTMLElement | null>(null);
   const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
   const scrollTopRef = useRef(0);
   const scrollRafRef = useRef<number | null>(null);
-  const rowHeightsRef = useRef(new Map<string, number>());
+  const rowHeightsRef = useRef(new Map<string, RowHeightCacheEntry>());
   const highlightHadTermsRef = useRef(false);
   const [virtualScrollTop, setVirtualScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(520);
@@ -435,42 +590,97 @@ export function BaseTableView<T>({
   }, []);
 
   const safeRowHeight = Math.max(32, estimatedRowHeight || VIRTUAL_INITIAL_ROW_HEIGHT);
-  const totalRows = sortedRecords.length;
+  const sourceDescriptorBrowsing =
+    sourceMode &&
+    !normalizedSearchQuery &&
+    (!selectedFolders.length || sourceModeFiltersActive) &&
+    !activeAlternateView;
+  const sourceSortingDisabled = sourceDescriptorBrowsing && totalCount > records.length;
+  const sourceBrowsingActive = sourceDescriptorBrowsing && !sorting.length;
+  const totalRows = sourceBrowsingActive
+    ? Math.max(totalCount, records.length)
+    : sortedRecords.length;
   const rowKeys = currentResultIds;
   const virtualOffsets = useMemo(() => {
+    if (sourceBrowsingActive) return [];
     const offsets = new Array<number>(totalRows + 1);
     offsets[0] = 0;
     for (let index = 0; index < totalRows; index += 1) {
       const key = rowKeys[index] || `row-${index}`;
-      const height = rowHeightsRef.current.get(key) || safeRowHeight;
+      const height = rowHeightsRef.current.get(key)?.height || safeRowHeight;
       offsets[index + 1] = (offsets[index] || 0) + Math.max(24, height);
     }
     return offsets;
-  }, [rowHeightsVersion, rowKeys, safeRowHeight, totalRows]);
-  const totalVirtualHeight = virtualOffsets[totalRows] || 0;
-  const startIndex = Math.max(
-    0,
-    findVirtualIndexForOffset(virtualOffsets, virtualScrollTop - VIRTUAL_OVERSCAN_PX) -
-      VIRTUAL_OVERSCAN_ROWS,
-  );
-  const requestedEndIndex =
-    findVirtualIndexForOffset(
-      virtualOffsets,
-      virtualScrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX,
-    ) +
-    VIRTUAL_OVERSCAN_ROWS +
-    1;
+  }, [rowHeightsVersion, rowKeys, safeRowHeight, sourceBrowsingActive, totalRows]);
+  const totalVirtualHeight = sourceBrowsingActive
+    ? totalRows * safeRowHeight
+    : virtualOffsets[totalRows] || 0;
+  const startIndex = sourceBrowsingActive
+    ? Math.max(
+        0,
+        Math.floor(Math.max(0, virtualScrollTop - VIRTUAL_OVERSCAN_PX) / safeRowHeight) -
+          VIRTUAL_OVERSCAN_ROWS,
+      )
+    : Math.max(
+        0,
+        findVirtualIndexForOffset(virtualOffsets, virtualScrollTop - VIRTUAL_OVERSCAN_PX) -
+          VIRTUAL_OVERSCAN_ROWS,
+      );
+  const requestedEndIndex = sourceBrowsingActive
+    ? Math.ceil((virtualScrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX) / safeRowHeight) +
+      VIRTUAL_OVERSCAN_ROWS +
+      1
+    : findVirtualIndexForOffset(
+        virtualOffsets,
+        virtualScrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX,
+      ) +
+      VIRTUAL_OVERSCAN_ROWS +
+      1;
   const endIndex = Math.min(
     totalRows,
     Math.max(startIndex + 1, Math.min(requestedEndIndex, startIndex + VIRTUAL_MAX_WINDOW_ROWS)),
   );
-  const visibleRecords = useMemo(
-    () => sortedRecords.slice(startIndex, endIndex),
-    [sortedRecords, startIndex, endIndex],
-  );
+  const sourceWindowEndIndex = sourceWindowStartIndex + records.length;
+  const sourceRenderStartIndex = sourceBrowsingActive
+    ? Math.max(sourceWindowStartIndex, Math.min(startIndex, sourceWindowEndIndex))
+    : startIndex;
+  const sourceRenderEndIndex = sourceBrowsingActive
+    ? Math.max(sourceRenderStartIndex, Math.min(endIndex, sourceWindowEndIndex, totalRows))
+    : endIndex;
+  const visibleRecords = useMemo(() => {
+    if (sourceBrowsingActive) {
+      const offsetStart = Math.max(0, sourceRenderStartIndex - sourceWindowStartIndex);
+      const offsetEnd = Math.max(offsetStart, sourceRenderEndIndex - sourceWindowStartIndex);
+      return records.slice(offsetStart, offsetEnd);
+    }
+    return sortedRecords.slice(startIndex, endIndex);
+  }, [
+    endIndex,
+    records,
+    sortedRecords,
+    sourceBrowsingActive,
+    sourceRenderEndIndex,
+    sourceRenderStartIndex,
+    sourceWindowStartIndex,
+    startIndex,
+  ]);
 
   useEffect(() => {
-    if (!hasMore || loading || loadingMore || activeAlternateView || normalizedSearchQuery) {
+    if (!sourceBrowsingActive || !onSourceWindowChange) return;
+    const paddedStart = Math.max(0, startIndex - VIRTUAL_OVERSCAN_ROWS);
+    const paddedEnd = Math.min(totalRows, endIndex + VIRTUAL_OVERSCAN_ROWS);
+    onSourceWindowChange(paddedStart, paddedEnd);
+  }, [endIndex, onSourceWindowChange, sourceBrowsingActive, startIndex, totalRows]);
+
+  useEffect(() => {
+    if (
+      sourceBrowsingActive ||
+      !hasMore ||
+      loading ||
+      loadingMore ||
+      activeAlternateView ||
+      normalizedSearchQuery
+    ) {
       return;
     }
     const remainingPx = Math.max(0, totalVirtualHeight - (virtualScrollTop + viewportHeight));
@@ -500,22 +710,110 @@ export function BaseTableView<T>({
     viewportHeight,
   ]);
 
-  const topSpacerHeight = virtualOffsets[startIndex] || 0;
+  const visibleStartIndex = sourceBrowsingActive ? sourceRenderStartIndex : startIndex;
+  const visibleEndIndex = sourceBrowsingActive
+    ? Math.min(totalRows, sourceRenderStartIndex + visibleRecords.length)
+    : endIndex;
+  const selectionExcludedRecordIds = useMemo(
+    () =>
+      selectionMode === 'all'
+        ? Object.entries(rowSelection)
+            .filter(([, excluded]) => excluded)
+            .map(([id]) => id)
+        : [],
+    [rowSelection, selectionMode],
+  );
+  const selectionExceptionCount = selectionExcludedRecordIds.length;
+  const selectedResultCount =
+    selectionMode === 'all'
+      ? Math.max(0, totalRows - selectionExceptionCount)
+      : selectedRecordIds.length;
+  const streamSelectedSourceRows = useMemo(() => {
+    if (
+      selectionMode !== 'explicit' ||
+      !selectedRecordIds.length ||
+      !hydrateRecordsByIds ||
+      !resultSourceDescriptor ||
+      !resultEntityType
+    ) {
+      return undefined;
+    }
+    const hydrationIds = selectedRecordIds
+      .map((id) => extractHydrationRecordId(id))
+      .filter((id) => id.length > 0);
+    if (!hydrationIds.length) {
+      return undefined;
+    }
+    const selectedSource = createExplicitSelectionResultSource<T>({
+      extensionName:
+        'extensionName' in resultSourceDescriptor
+          ? resultSourceDescriptor.extensionName
+          : undefined,
+      entityType: resultEntityType,
+      ids: hydrationIds,
+      source: resultSourceDescriptor,
+      hydrateByIds: hydrateRecordsByIds,
+    });
+    return () => selectedSource.streamRows();
+  }, [
+    hydrateRecordsByIds,
+    resultEntityType,
+    resultSourceDescriptor,
+    selectedRecordIds,
+    selectionMode,
+  ]);
+  const topSpacerHeight = sourceBrowsingActive
+    ? visibleStartIndex * safeRowHeight
+    : virtualOffsets[startIndex] || 0;
   const bottomSpacerHeight = Math.max(
     0,
-    totalVirtualHeight - (virtualOffsets[endIndex] || totalVirtualHeight),
+    totalVirtualHeight -
+      (sourceBrowsingActive
+        ? visibleEndIndex * safeRowHeight
+        : virtualOffsets[endIndex] || totalVirtualHeight),
   );
+
+  useEffect(() => {
+    if (!sourceSortingDisabled || !sorting.length) return;
+    setSorting([]);
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'source-sort-cleared',
+      value: totalCount,
+      tags: metricTags,
+    });
+  }, [metricTags, setSorting, sorting.length, sourceSortingDisabled, totalCount]);
 
   const toggleResultRowSelected = (rowId: string) => {
     if (selectionMode === 'all') {
-      handleRowSelectionChange(() => {
-        const next: RowSelectionState = {};
-        currentResultIds.forEach((id) => {
-          if (id !== rowId) {
-            next[id] = true;
-          }
+      setRowSelection((current) => {
+        const next = { ...current };
+        if (next[rowId]) {
+          delete next[rowId];
+        } else {
+          next[rowId] = true;
+        }
+        recordPerfMetric({
+          kind: 'viewer',
+          name: 'selection-all-exception-toggle',
+          value: Object.keys(next).length,
+          tags: {
+            ...metricTags,
+            totalRows,
+            rowId,
+          },
         });
         return next;
+      });
+      recordPerfMetric({
+        kind: 'viewer',
+        name: 'selection-mode-retained-all',
+        value: Math.max(0, totalRows - 1),
+        tags: {
+          ...metricTags,
+          totalRows,
+          rowId,
+        },
       });
       return;
     }
@@ -526,20 +824,48 @@ export function BaseTableView<T>({
   };
 
   const toggleAllResultRowsSelected = () => {
-    const shouldSelectAll =
-      selectionMode !== 'all' || currentResultIds.some((id) => !rowSelection[id]);
-    handleRowSelectionChange(() => {
-      if (!shouldSelectAll) {
-        return {};
+    if (selectionMode === 'all') {
+      if (selectionExceptionCount > 0) {
+        setRowSelection({});
+        recordPerfMetric({
+          kind: 'viewer',
+          name: 'selection-all-exceptions-cleared',
+          value: totalRows,
+          tags: metricTags,
+        });
+        return;
       }
-      if (selectionMode === 'all') {
-        return rowSelection;
-      }
-      const next: RowSelectionState = {};
-      currentResultIds.forEach((id) => {
-        next[id] = true;
+      setSelectionMode('explicit');
+      setRowSelection({});
+      recordPerfMetric({
+        kind: 'viewer',
+        name: 'selection-all-cleared',
+        value: 0,
+        tags: metricTags,
       });
-      return next;
+      return;
+    }
+
+    const allVisibleSelected =
+      currentResultIds.length > 0 && currentResultIds.every((id) => !!rowSelection[id]);
+    if (allVisibleSelected) {
+      setRowSelection({});
+      recordPerfMetric({
+        kind: 'viewer',
+        name: 'selection-explicit-visible-cleared',
+        value: 0,
+        tags: metricTags,
+      });
+      return;
+    }
+
+    setSelectionMode('all');
+    setRowSelection({});
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'selection-explicit-promoted-all',
+      value: totalRows,
+      tags: metricTags,
     });
   };
 
@@ -548,7 +874,8 @@ export function BaseTableView<T>({
     columns,
     enableRowSelection: true,
     getCoreRowModel: getCoreRowModel(),
-    getRowId: (record, index) => extractStableRecordId(record, startIndex + index),
+    getRowId: (record, index) => extractStableRecordId(record, visibleStartIndex + index),
+    enableSorting: !sourceSortingDisabled,
     manualSorting: true,
     onSortingChange: setSorting,
     onRowSelectionChange: handleRowSelectionChange,
@@ -565,12 +892,16 @@ export function BaseTableView<T>({
       rawDataPreview,
       setRawDataPreview: (data) => setRawDataPreview(data),
       isAllResultRowsSelected: () =>
-        currentResultIds.length > 0 &&
-        (selectionMode === 'all' || currentResultIds.every((id) => !!rowSelection[id])),
+        selectionMode === 'all'
+          ? currentResultIds.length > 0 && selectionExceptionCount === 0
+          : currentResultIds.length > 0 && currentResultIds.every((id) => !!rowSelection[id]),
       isSomeResultRowsSelected: () =>
-        selectionMode === 'all' ? false : currentResultIds.some((id) => !!rowSelection[id]),
+        selectionMode === 'all'
+          ? selectionExceptionCount > 0
+          : currentResultIds.some((id) => !!rowSelection[id]),
       toggleAllResultRowsSelected,
-      isResultRowSelected: (rowId) => (selectionMode === 'all' ? true : !!rowSelection[rowId]),
+      isResultRowSelected: (rowId) =>
+        selectionMode === 'all' ? !rowSelection[rowId] : !!rowSelection[rowId],
       toggleResultRowSelected,
     },
   });
@@ -583,14 +914,143 @@ export function BaseTableView<T>({
       kind: 'viewer',
       name: 'first-visible-rows',
       durationMs: nowMs() - openedAtRef.current,
+      value: visibleRows.length,
       tags: {
-        title,
-        records: records.length,
+        ...metricTags,
+        hydratedRecords: records.length,
+        totalRows,
+        loadedCount,
+        totalCount,
+        searchDocuments: searchDocuments?.length ?? 0,
         visibleRows: visibleRows.length,
         loading,
       },
     });
-  }, [loading, records.length, title, visibleRows.length]);
+  }, [
+    loadedCount,
+    loading,
+    metricTags,
+    records.length,
+    searchDocuments?.length,
+    totalCount,
+    totalRows,
+    visibleRows.length,
+  ]);
+
+  useEffect(() => {
+    if (firstInteractiveReportedRef.current || loading || !visibleRows.length) return;
+    firstInteractiveReportedRef.current = true;
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'first-interactive',
+      durationMs: nowMs() - openedAtRef.current,
+      value: visibleRows.length,
+      tags: {
+        ...metricTags,
+        hydratedRecords: records.length,
+        loadedCount,
+        totalCount,
+        totalRows,
+        visibleRows: visibleRows.length,
+      },
+    });
+  }, [loadedCount, loading, metricTags, records.length, totalCount, totalRows, visibleRows.length]);
+
+  useEffect(() => {
+    if (firstStableLayoutReportedRef.current || loading || loadingMore || !visibleRows.length) {
+      return;
+    }
+    const handle = globalThis.setTimeout(() => {
+      if (firstStableLayoutReportedRef.current) return;
+      firstStableLayoutReportedRef.current = true;
+      recordPerfMetric({
+        kind: 'viewer',
+        name: 'first-stable-layout',
+        durationMs: nowMs() - openedAtRef.current,
+        value: visibleRows.length,
+        tags: {
+          ...metricTags,
+          hydratedRecords: records.length,
+          loadedCount,
+          totalCount,
+          totalRows,
+          visibleRows: visibleRows.length,
+          safeRowHeight,
+          measuredRows: rowHeightsRef.current.size,
+          virtualHeight: totalVirtualHeight,
+        },
+      });
+    }, 350);
+    return () => globalThis.clearTimeout(handle);
+  }, [
+    loadedCount,
+    loading,
+    loadingMore,
+    metricTags,
+    records.length,
+    safeRowHeight,
+    totalCount,
+    totalRows,
+    totalVirtualHeight,
+    visibleRows.length,
+  ]);
+
+  useEffect(() => {
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-hydrated-records',
+      value: records.length,
+      tags: metricTags,
+    });
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-search-documents',
+      value: searchDocuments?.length ?? 0,
+      tags: metricTags,
+    });
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-result-ids',
+      value: currentResultIds.length,
+      tags: metricTags,
+    });
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-selected-records',
+      value: selectedRecords.length,
+      tags: { ...metricTags, selectionMode },
+    });
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-selection-exceptions',
+      value: selectionExceptionCount,
+      tags: { ...metricTags, selectionMode },
+    });
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-selected-result-count',
+      value: selectedResultCount,
+      tags: { ...metricTags, selectionMode },
+    });
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-visible-rows',
+      value: visibleRows.length,
+      tags: { ...metricTags, startIndex, endIndex },
+    });
+  }, [
+    currentResultIds.length,
+    endIndex,
+    metricTags,
+    records.length,
+    searchDocuments?.length,
+    selectedRecords.length,
+    selectedResultCount,
+    selectionExceptionCount,
+    selectionMode,
+    startIndex,
+    visibleRows.length,
+  ]);
 
   useEffect(() => {
     const body = tbodyRef.current;
@@ -609,9 +1069,15 @@ export function BaseTableView<T>({
         const key = row.dataset.vrowKey;
         if (key && Number.isFinite(measuredHeight) && measuredHeight > 0) {
           const previous = rowHeightsRef.current.get(key);
-          if (!previous || Math.abs(previous - measuredHeight) > 2) {
-            rowHeightsRef.current.set(key, measuredHeight);
+          if (!previous || Math.abs(previous.height - measuredHeight) > 2) {
+            rowHeightsRef.current.set(key, {
+              height: measuredHeight,
+              touchedAt: nowMs(),
+            });
+            trimRowHeightCache(rowHeightsRef.current);
             changed = true;
+          } else {
+            previous.touchedAt = nowMs();
           }
         }
       }
@@ -625,8 +1091,19 @@ export function BaseTableView<T>({
     }
     if (changed) {
       setRowHeightsVersion((version) => version + 1);
+      recordPerfMetric({
+        kind: 'viewer',
+        name: 'table-row-height-cache',
+        value: rowHeightsRef.current.size,
+        tags: {
+          ...metricTags,
+          limit: ROW_HEIGHT_CACHE_LIMIT,
+          measuredRows: measuredCount,
+          visibleRows: visibleRows.length,
+        },
+      });
     }
-  }, [endIndex, normalizedSearchQuery, selectedFolders, startIndex, visibleRows]);
+  }, [endIndex, metricTags, normalizedSearchQuery, selectedFolders, startIndex, visibleRows]);
 
   useEffect(() => {
     const root = tbodyRef.current;
@@ -781,8 +1258,8 @@ export function BaseTableView<T>({
       <section
         class={
           isFullscreen
-            ? 'border-b border-base-300 bg-base-100 px-3 py-2'
-            : 'mb-1.5 rounded-box-half border border-base-300 bg-base-200 px-2 py-1.5'
+            ? 'sticky top-0 z-20 border-b border-base-300 bg-base-100 px-3 py-2'
+            : 'sticky top-0 z-20 mb-1.5 rounded-box-half border border-base-300 bg-base-200 px-2 py-1.5'
         }
       >
         <div class="flex items-center gap-2">
@@ -815,7 +1292,7 @@ export function BaseTableView<T>({
               class="w-56"
               options={bookmarkFolderOptions}
               selected={selectedFolders}
-              onChange={setSelectedFolders}
+              onChange={handleBookmarkFolderSelectionChange}
               placeholder={t('Bookmark folders')}
               selectedSummary={(count) =>
                 count === 1 ? t('1 folder selected') : t('{{count}} folders selected', { count })
@@ -834,16 +1311,28 @@ export function BaseTableView<T>({
               >
                 <IconTable size={16} />
               </button>
-              {alternateViews.map((view) => (
-                <button
-                  key={view.id}
-                  class={`btn join-item btn-sm ${activeViewId === view.id ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => setActiveViewId(view.id)}
-                  title={view.label}
-                >
-                  {view.icon === 'grid' ? <IconLayoutGrid size={16} /> : <IconTable size={16} />}
-                </button>
-              ))}
+              {alternateViews.map((view) => {
+                const viewBlocked =
+                  sourceMode &&
+                  totalCount > LARGE_ALTERNATE_VIEW_SOURCE_THRESHOLD &&
+                  view.sourceBacked !== true &&
+                  !normalizedSearchQuery;
+                return (
+                  <button
+                    key={view.id}
+                    class={`btn join-item btn-sm ${activeViewId === view.id ? 'btn-primary' : 'btn-ghost'} ${viewBlocked ? 'btn-disabled' : ''}`}
+                    onClick={() => setActiveViewId(view.id)}
+                    disabled={viewBlocked}
+                    title={
+                      viewBlocked
+                        ? `${view.label} is disabled for large source-backed result sets.`
+                        : view.label
+                    }
+                  >
+                    {view.icon === 'grid' ? <IconLayoutGrid size={16} /> : <IconTable size={16} />}
+                  </button>
+                );
+              })}
             </div>
           ) : null}
           <button
@@ -856,8 +1345,18 @@ export function BaseTableView<T>({
         </div>
         {normalizedSearchQuery ? (
           <div class="mt-1.5 space-y-1 text-[10px] leading-4">
-            {searchPending ? (
-              <div class="font-mono opacity-70">searching local index...</div>
+            {searchReadinessState.phase !== 'idle' ? (
+              <div
+                class={`font-mono ${
+                  searchReadinessState.phase === 'degraded' ||
+                  searchReadinessState.phase === 'failed'
+                    ? 'text-warning'
+                    : 'opacity-70'
+                }`}
+              >
+                {searchReadinessState.label}
+                {searchReadinessState.cancellable ? ' - cancellable on query change' : ''}
+              </div>
             ) : null}
             {searchResult.parsed.lexicalExpression ? (
               <div class="font-mono opacity-70 break-all">
@@ -876,26 +1375,49 @@ export function BaseTableView<T>({
             ) : null}
           </div>
         ) : null}
-        <div class="mt-1 flex items-center justify-between text-[10px] leading-4 font-mono opacity-70">
-          <span>
-            {loading
-              ? `loading ${loadedCount}/${Math.max(totalCount, records.length)}`
-              : normalizedSearchQuery
-                ? `${searchPending ? 'searching' : 'matches'} ${searchResult.totalMatches}/${records.length}`
-                : hasMore || totalCount > records.length
-                  ? `rows ${records.length}/${Math.max(totalCount, records.length)}`
-                  : `rows ${records.length}`}
-            {!normalizedSearchQuery && loadingMore ? ' buffering...' : ''}
+        <div class="mt-1 flex min-w-0 items-center justify-between gap-3 overflow-hidden whitespace-nowrap text-[10px] leading-4 font-mono opacity-70">
+          <span class="min-w-0 flex-1 truncate">
+            {activeAlternateView
+              ? `${activeAlternateView.label} view${
+                  alternateDiagnostics?.primary ? ` - ${alternateDiagnostics.primary}` : ''
+                }`
+              : loading
+                ? `loading ${loadedCount}/${Math.max(totalCount, records.length)}`
+                : normalizedSearchQuery
+                  ? `${searchPending ? 'searching' : 'matches'} ${searchResult.totalMatches}/${records.length}`
+                  : hasMore || totalCount > records.length
+                    ? `rows ${records.length}/${Math.max(totalCount, records.length)}`
+                    : `rows ${records.length}`}
+            {!activeAlternateView && !normalizedSearchQuery && loadingMore ? ' buffering...' : ''}
           </span>
-          <div class="flex items-center gap-3">
-            {searchHistoryScope ? <span>history {searchHistoryCount}</span> : null}
-            <span>
-              selected {selectedRecords.length} ({selectionMode})
-            </span>
-            <span>
-              rendered {visibleRows.length}/{sortedRecords.length} (window {startIndex + 1}-
-              {endIndex || 0})
-            </span>
+          <div class="flex shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap">
+            {activeAlternateView ? (
+              <>
+                {(alternateDiagnostics?.details ?? []).map((detail) => (
+                  <span key={detail.key} class={diagnosticVisibilityClass(detail.minWidth)}>
+                    {detail.label}
+                  </span>
+                ))}
+                {alternateDiagnostics?.actions ? (
+                  <span class="shrink-0">{alternateDiagnostics.actions}</span>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {searchHistoryScope ? (
+                  <span class="hidden lg:inline">history {searchHistoryCount}</span>
+                ) : null}
+                <span class="hidden md:inline">
+                  selected {selectedResultCount} ({selectionMode})
+                </span>
+                {tableTelemetryActive ? (
+                  <span class="hidden sm:inline">
+                    rendered {visibleRows.length}/{totalRows} (window {visibleStartIndex + 1}-
+                    {visibleEndIndex || 0})
+                  </span>
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -906,12 +1428,29 @@ export function BaseTableView<T>({
         onScroll={onTableScroll}
         class="max-w-full grow overflow-y-auto overflow-x-auto bg-base-200 overscroll-none rounded-box-half border border-base-300"
       >
-        {ActiveAlternateView ? (
+        {ActiveAlternateView && activeAlternateViewBlocked ? (
+          <div class="flex h-[320px] flex-col items-center justify-center gap-3 px-4 text-center text-sm">
+            <div class="max-w-md opacity-70">
+              {activeAlternateView?.label} is available after narrowing the result set or switching
+              back to table mode.
+            </div>
+            <button class="btn btn-sm btn-primary" onClick={() => setActiveViewId('table')}>
+              <IconTable size={16} />
+              Table
+            </button>
+          </div>
+        ) : ActiveAlternateView ? (
           <ActiveAlternateView
             records={sortedRecords}
             scrollParentRef={scrollAreaRef}
             storageKey={`${resolvedViewStateKey}:${activeAlternateView?.id || 'table'}`}
             fullscreen={isFullscreen}
+            sourceMode={sourceMode}
+            sourceTotalCount={totalCount}
+            streamSourceRows={streamSourceRows}
+            mediaSourceTotalCount={mediaSourceTotalCount}
+            streamMediaRows={streamMediaRows}
+            onDiagnosticsChange={handleAlternateDiagnosticsChange}
             onOpenMedia={(url) => {
               setMediaPreview(url);
               setShowMediaModal(true);
@@ -954,7 +1493,13 @@ export function BaseTableView<T>({
                   <tr
                     key={row.id}
                     data-vrow="1"
-                    data-vrow-key={rowKeys[startIndex + index] || row.id}
+                    data-vrow-key={
+                      rowKeys[
+                        sourceBrowsingActive
+                          ? Math.max(0, visibleStartIndex - sourceWindowStartIndex) + index
+                          : visibleStartIndex + index
+                      ] || row.id
+                    }
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td key={cell.id}>
@@ -975,7 +1520,7 @@ export function BaseTableView<T>({
             </table>
 
             {/* Empty view. */}
-            {sortedRecords.length > 0 ? null : (
+            {visibleRecords.length > 0 ? null : (
               <div class="flex items-center justify-center h-[320px] w-full">
                 <p class="text-base-content text-opacity-50">{t('No data available.')}</p>
               </div>
@@ -997,7 +1542,7 @@ export function BaseTableView<T>({
           loadingMore,
           loadedCount,
           totalCount,
-          resultRecords: sortedRecords,
+          resultRecords: sourceBrowsingActive ? visibleRecords : sortedRecords,
           visibleRecords,
         })}
         <button
@@ -1009,9 +1554,11 @@ export function BaseTableView<T>({
               ? 'Export menu is open while remaining rows load in the background.'
               : loading
                 ? 'Wait for records to finish loading before exporting.'
-                : hasMore && !normalizedSearchQuery
-                  ? 'Opens immediately and loads remaining rows in the background.'
-                  : undefined
+                : sourceBrowsingActive && streamSourceRows
+                  ? 'Exports stream from the active source without loading all rows into the table.'
+                  : hasMore && !normalizedSearchQuery
+                    ? 'Opens immediately and loads remaining rows in the background.'
+                    : undefined
           }
         >
           {preparingExport ? <span class="loading loading-spinner" /> : null}
@@ -1117,8 +1664,13 @@ export function BaseTableView<T>({
       <ExportDataModal
         title={title}
         columns={columns}
-        resultRecords={sortedRecords}
+        resultRecords={sourceBrowsingActive ? visibleRecords : sortedRecords}
+        resultCount={sourceBrowsingActive ? totalRows : sortedRecords.length}
+        streamResultRecords={sourceBrowsingActive ? streamSourceRows : streamSearchResultRows}
         selectedRecords={selectedRecords}
+        selectedRecordCount={selectionMode === 'explicit' ? selectedRecordIds.length : undefined}
+        streamSelectedRecords={streamSelectedSourceRows}
+        selectionExcludedRecordIds={selectionExcludedRecordIds}
         resultSetSnapshot={resultSetSnapshot}
         selectionMode={selectionMode}
         preparingFullDataset={preparingExport}
@@ -1129,9 +1681,10 @@ export function BaseTableView<T>({
       {/* Extra contents. */}
       {renderExtra?.(table, {
         resultSetSnapshot,
-        resultRecords: sortedRecords,
+        resultRecords: sourceBrowsingActive ? visibleRecords : sortedRecords,
         selectedRecords,
         selectionMode,
+        selectionExcludedRecordIds,
       })}
     </div>
   );

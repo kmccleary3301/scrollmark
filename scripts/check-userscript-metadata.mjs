@@ -79,17 +79,25 @@ for (const file of targets) {
   );
 
   if (isRelease) {
+    assert(
+      one(metadata, 'inject-into', file) === 'page',
+      `${file}: release build must inject into page context`,
+    );
     const expected =
       'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js';
     assert(has(metadata, 'downloadURL', expected), `${file}: missing release @downloadURL`);
     assert(has(metadata, 'updateURL', expected), `${file}: missing release @updateURL`);
     assert(
-      (metadata.get('require') ?? []).length > 0,
-      `${file}: production build should externalize dependencies`,
+      !(metadata.get('require') ?? []).length,
+      `${file}: production build should bundle dependencies`,
     );
   }
 
   if (isStore) {
+    assert(
+      one(metadata, 'inject-into', file) === 'page',
+      `${file}: store build must inject into page context`,
+    );
     assert(
       !(metadata.get('downloadURL') ?? []).length,
       `${file}: store artifact should omit @downloadURL`,
@@ -99,12 +107,17 @@ for (const file of targets) {
       `${file}: store artifact should omit @updateURL`,
     );
     assert(
-      (metadata.get('require') ?? []).length > 0,
-      `${file}: store build should externalize dependencies`,
+      !(metadata.get('require') ?? []).length,
+      `${file}: store build should bundle dependencies`,
     );
   }
 
   if (isE2E) {
+    const injectInto = one(metadata, 'inject-into', file);
+    assert(
+      injectInto === 'content' || injectInto === 'page',
+      `${file}: e2e build must declare @inject-into`,
+    );
     assert(
       (metadata.get('downloadURL') ?? []).some((url) => url.includes('localhost:8123')),
       `${file}: e2e build must use local downloadURL`,

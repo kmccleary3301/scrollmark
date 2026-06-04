@@ -2,7 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   collectRecordLookupIds,
+  createResultSetSnapshot,
   extractStableRecordId,
+  RESULT_SET_SNAPSHOT_ID_LIMIT,
   resolveOrderedAvailableRecords,
 } from '@/utils/result-set';
 
@@ -44,6 +46,31 @@ const folderAfterLaterAttempt = resolveOrderedAvailableRecords(
   new Set(['b', 'e']),
 );
 
+const hugeIds = Array.from({ length: 100_000 }, (_, index) => `tweet-${index}`);
+const descriptorBackedSnapshot = createResultSetSnapshot({
+  queryText: '',
+  sort: 'default',
+  ids: hugeIds.slice(0, 160),
+  idsTruncated: true,
+  sourceDescriptor: {
+    schema: 'scrollmark.result_source.v1',
+    kind: 'folder',
+    extensionName: 'BookmarksModule',
+    entityType: 'tweet',
+    folderIds: ['folder-large'],
+    sort: { kind: 'observed_at', direction: 'desc' },
+  },
+  totalMatches: 100_000,
+  warnings: [],
+});
+const cappedArraySnapshot = createResultSetSnapshot({
+  queryText: 'bounded fallback',
+  sort: 'default',
+  ids: hugeIds,
+  totalMatches: hugeIds.length,
+  warnings: ['array fallback was capped'],
+});
+
 const checks = [
   {
     name: 'stable id preserves bookmark folder context',
@@ -74,6 +101,30 @@ const checks = [
     name: 'ordered folder hydration remains deterministic after later missing row is attempted',
     ok: folderAfterLaterAttempt.map((record) => record.id).join(',') === 'a,c,d',
     details: { visibleIds: folderAfterLaterAttempt.map((record) => record.id) },
+  },
+  {
+    name: 'descriptor-backed all-result snapshot stores no visible-window ids',
+    ok:
+      descriptorBackedSnapshot.ids.length === 0 &&
+      descriptorBackedSnapshot.idsTotalCount === 160 &&
+      descriptorBackedSnapshot.idsTruncated === true &&
+      descriptorBackedSnapshot.sourceDescriptor?.kind === 'folder' &&
+      descriptorBackedSnapshot.totalMatches === 100_000,
+    details: descriptorBackedSnapshot,
+  },
+  {
+    name: 'array fallback snapshot caps ids before it can clone an unbounded result set',
+    ok:
+      cappedArraySnapshot.ids.length === RESULT_SET_SNAPSHOT_ID_LIMIT &&
+      cappedArraySnapshot.idsTotalCount === hugeIds.length &&
+      cappedArraySnapshot.idsTruncated === true &&
+      JSON.stringify(cappedArraySnapshot).length < 200_000,
+    details: {
+      idLimit: RESULT_SET_SNAPSHOT_ID_LIMIT,
+      idsLength: cappedArraySnapshot.ids.length,
+      idsTotalCount: cappedArraySnapshot.idsTotalCount,
+      jsonBytes: Buffer.byteLength(JSON.stringify(cappedArraySnapshot)),
+    },
   },
 ];
 

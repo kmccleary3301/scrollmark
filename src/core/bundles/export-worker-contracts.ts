@@ -5,8 +5,17 @@ export type BundleExportWorkerRequest =
   | {
       type: 'bundle-export:start';
       jobId: string;
-      rows: Array<BundleExportSourceRow<unknown>>;
       options: Omit<BundleExportOptions, 'onProgress'>;
+      totalRecords: number;
+    }
+  | {
+      type: 'bundle-export:chunk';
+      jobId: string;
+      rows: Array<BundleExportSourceRow<unknown>>;
+    }
+  | {
+      type: 'bundle-export:finish';
+      jobId: string;
     }
   | {
       type: 'bundle-export:cancel';
@@ -14,6 +23,10 @@ export type BundleExportWorkerRequest =
     };
 
 export type BundleExportWorkerResponse =
+  | {
+      type: 'bundle-export:ready-for-chunk';
+      jobId: string;
+    }
   | {
       type: 'bundle-export:progress';
       jobId: string;

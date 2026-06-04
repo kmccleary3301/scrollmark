@@ -1,5 +1,5 @@
 import { JSX } from 'preact';
-import { useRef } from 'preact/hooks';
+import { useMemo, useRef, useState } from 'preact/hooks';
 import { IconArrowUpRight, IconSearch, IconX } from '@tabler/icons-preact';
 
 import { useTranslation } from '@/i18n';
@@ -178,7 +178,19 @@ type MultiSelectProps<T> = {
 
 export function MultiSelect<T extends string>(props: MultiSelectProps<T>) {
   const { options, selected, onChange } = props;
+  const [filterText, setFilterText] = useState('');
   const selectedOptions = options.filter((option) => selected.includes(option.value));
+  const filteredOptions = useMemo(() => {
+    const query = filterText.trim().toLowerCase();
+    const matches = query
+      ? options.filter(
+          (option) =>
+            option.label.toLowerCase().includes(query) ||
+            String(option.value).toLowerCase().includes(query),
+        )
+      : options;
+    return matches.slice(0, 250);
+  }, [filterText, options]);
 
   const onInputChange = (e: Event) => {
     const target = e.target as HTMLInputElement;
@@ -209,7 +221,17 @@ export function MultiSelect<T extends string>(props: MultiSelectProps<T>) {
         tabIndex={0}
         class="dropdown-content menu menu-sm z-10 w-full rounded-box bg-base-100 p-2 shadow"
       >
-        {options.map((option) => (
+        {options.length > 80 ? (
+          <li class="mb-1">
+            <input
+              class="input input-bordered input-xs w-full"
+              value={filterText}
+              placeholder="Filter..."
+              onInput={(event) => setFilterText((event.target as HTMLInputElement).value)}
+            />
+          </li>
+        ) : null}
+        {filteredOptions.map((option) => (
           <li key={option.value}>
             <label class="label cursor-pointer justify-start">
               <input

@@ -1,5 +1,7 @@
 import logger from './logger';
 
+const STREAM_EXPORT_ROW_DELAY_KEY = 'twe_stream_export_row_delay_ms_v1';
+
 /**
  * Supported formats of exporting.
  */
@@ -78,6 +80,152 @@ export async function exportData(
     saveFile(filename, content, prependBOM);
   } catch (err) {
     logger.errorWithBanner('Failed to export file', err as Error);
+  }
+}
+
+type StreamExportOptions = {
+  onProgress?: (processed: number) => void;
+  signal?: AbortSignal;
+};
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function stringifyCellValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
+function readDiagnosticStreamExportRowDelayMs(): number {
+  if (typeof localStorage === 'undefined') return 0;
+  try {
+    const raw = localStorage.getItem(STREAM_EXPORT_ROW_DELAY_KEY);
+    const value = Number(raw || 0);
+    return Number.isFinite(value) && value > 0 ? Math.min(1000, value) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function waitForDiagnosticStreamExportRowDelay(delayMs: number): Promise<void> {
+  if (!delayMs) return;
+  await new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, delayMs);
+  });
+}
+
+export async function exportDataFromAsyncRows(
+  rows: AsyncIterable<DataType>,
+  format: ExportFormatType,
+  filename: string,
+  translations: Record<string, string>,
+  options: StreamExportOptions = {},
+) {
+  try {
+    logger.info(`Streaming export to ${format} file: ${filename}`);
+    let processed = 0;
+    let headers: string[] = [];
+    const chunks: string[] = [];
+    const diagnosticRowDelayMs = readDiagnosticStreamExportRowDelayMs();
+    const updateProgress = () => {
+      processed += 1;
+      options.onProgress?.(processed);
+    };
+
+    if (format === EXPORT_FORMAT.JSON) {
+      chunks.push('[\n');
+      let first = true;
+      for await (const row of rows) {
+        if (options.signal?.aborted) return;
+        chunks.push(first ? '' : ',\n');
+        chunks.push(JSON.stringify(row, undefined, '  ').replace(/^/gm, '  '));
+        first = false;
+        updateProgress();
+        await waitForDiagnosticStreamExportRowDelay(diagnosticRowDelayMs);
+      }
+      chunks.push('\n]\n');
+      saveFile(filename, new Blob(chunks, { type: 'application/json;charset=utf-8' }));
+      return;
+    }
+
+    if (format === EXPORT_FORMAT.CSV) {
+      let wroteHeader = false;
+      for await (const row of rows) {
+        if (options.signal?.aborted) return;
+        if (!wroteHeader) {
+          headers = Object.keys(row);
+          chunks.push(headers.join(',') + '\n');
+          wroteHeader = true;
+        }
+        chunks.push(
+          headers
+            .map((header) => {
+              const value = row[header];
+              return typeof value === 'object'
+                ? csvEscapeStr(JSON.stringify(value))
+                : csvEscapeStr(stringifyCellValue(value));
+            })
+            .join(',') + '\n',
+        );
+        updateProgress();
+        await waitForDiagnosticStreamExportRowDelay(diagnosticRowDelayMs);
+      }
+      saveFile(
+        filename,
+        new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), ...chunks], {
+          type: 'text/csv;charset=utf-8',
+        }),
+      );
+      return;
+    }
+
+    chunks.push(`
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Exported Data ${new Date().toISOString()}</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+      </head>
+      <body>
+        <table class="table table-striped">
+`);
+    let wroteHeader = false;
+    for await (const row of rows) {
+      if (options.signal?.aborted) return;
+      if (!wroteHeader) {
+        headers = Object.keys(row);
+        chunks.push('<thead><tr>');
+        for (const header of headers) {
+          chunks.push(`<th>${escapeHtml(translations[header] ?? header)}</th>`);
+        }
+        chunks.push('</tr></thead><tbody>');
+        wroteHeader = true;
+      }
+      chunks.push('<tr>');
+      for (const header of headers) {
+        chunks.push(`<td>${escapeHtml(stringifyCellValue(row[header]))}</td>`);
+      }
+      chunks.push('</tr>');
+      updateProgress();
+      await waitForDiagnosticStreamExportRowDelay(diagnosticRowDelayMs);
+    }
+    chunks.push(`
+          </tbody>
+        </table>
+      </body>
+    </html>
+`);
+    saveFile(filename, new Blob(chunks, { type: 'text/html;charset=utf-8' }));
+  } catch (err) {
+    logger.errorWithBanner('Failed to stream export file', err as Error);
   }
 }
 

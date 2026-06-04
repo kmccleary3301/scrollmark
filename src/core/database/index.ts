@@ -1,6 +1,10 @@
 import { DatabaseManager } from './manager';
 
 export * from './manager';
+export * from './result-source';
+export * from './result-source-diagnostics';
+export * from './id-result-sources';
+export * from './result-sources';
 
 /**
  * Global database manager singleton instance.

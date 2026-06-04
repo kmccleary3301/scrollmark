@@ -18,16 +18,20 @@ import {
 import { DEFAULT_MEDIA_TYPES, extractMedia, patterns } from '@/utils/media';
 import { Modal, MultiSelect } from '@/components/common';
 import { options } from '@/core/options';
+import { nowMs, recordPerfMetric } from '@/core/perf/metrics';
 import { TranslationKey, useTranslation } from '@/i18n';
 import { Media, Tweet, User } from '@/types';
 import { useSignalState, cx, useToggle } from '@/utils/common';
 import logger from '@/utils/logger';
-import { ResultSetSnapshot } from '@/utils/result-set';
+import { extractStableRecordId, ResultSetSnapshot } from '@/utils/result-set';
 
 type ExportMediaModalProps<T> = {
   title: string;
   resultRecords: T[];
   selectedRecords: T[];
+  streamResultMediaRows?: () => AsyncIterable<T>;
+  resultMediaSourceCount?: number;
+  selectionExcludedRecordIds?: string[];
   resultSetSnapshot: ResultSetSnapshot;
   selectionMode: 'all' | 'explicit';
   isTweet?: boolean;
@@ -65,6 +69,9 @@ export function ExportMediaModal<T>({
   title,
   resultRecords,
   selectedRecords,
+  streamResultMediaRows,
+  resultMediaSourceCount,
+  selectionExcludedRecordIds = [],
   resultSetSnapshot,
   selectionMode,
   isTweet,
@@ -89,6 +96,9 @@ export function ExportMediaModal<T>({
   const [exportScope, setExportScope] = useSignalState<ExportScopeType>('result_set');
   const [pinnedResultRecords, setPinnedResultRecords] = useState<T[]>([]);
   const [pinnedSelectedRecords, setPinnedSelectedRecords] = useState<T[]>([]);
+  const [sourceResultMediaList, setSourceResultMediaList] = useState<FileLike[]>([]);
+  const [sourceResultMediaLoading, setSourceResultMediaLoading] = useState(false);
+  const [sourceResultRowsScanned, setSourceResultRowsScanned] = useState(0);
   const [pinnedResultSetSnapshot, setPinnedResultSetSnapshot] = useState<ResultSetSnapshot | null>(
     null,
   );
@@ -103,19 +113,26 @@ export function ExportMediaModal<T>({
   ]);
 
   const includeRetweets = filters.includes('retweet');
+  const sourceResultAvailable = Boolean(streamResultMediaRows);
   const activeRecords = useMemo(
     () => (exportScope === 'selected' ? pinnedSelectedRecords : pinnedResultRecords),
     [exportScope, pinnedResultRecords, pinnedSelectedRecords],
   );
-  const mediaList = useMemo(
-    () =>
-      extractMedia(
-        activeRecords as Tweet[] | User[],
-        includeRetweets,
-        filenamePattern ?? '',
-      ).filter((media) => filters.includes(media.type as MediaFilterType)),
-    [activeRecords, filters, filenamePattern, includeRetweets],
-  );
+  const mediaList = useMemo(() => {
+    const rawMedia =
+      exportScope === 'result_set' && sourceResultAvailable
+        ? sourceResultMediaList
+        : extractMedia(activeRecords as Tweet[] | User[], includeRetweets, filenamePattern ?? '');
+    return rawMedia.filter((media) => filters.includes(media.type as MediaFilterType));
+  }, [
+    activeRecords,
+    exportScope,
+    filenamePattern,
+    filters,
+    includeRetweets,
+    sourceResultAvailable,
+    sourceResultMediaList,
+  ]);
   const previewMediaList = useMemo(() => mediaList.slice(0, 250), [mediaList]);
   const previewFilenameSet = useMemo(
     () => new Set(previewMediaList.map((media) => media.filename)),
@@ -125,6 +142,9 @@ export function ExportMediaModal<T>({
   useEffect(() => {
     if (!show) {
       wasOpenRef.current = false;
+      setSourceResultMediaList([]);
+      setSourceResultMediaLoading(false);
+      setSourceResultRowsScanned(0);
       return;
     }
     if (wasOpenRef.current) {
@@ -133,7 +153,15 @@ export function ExportMediaModal<T>({
 
     wasOpenRef.current = true;
 
-    setPinnedResultRecords(resultRecords.map((row) => cloneSnapshotValue(row)));
+    const excludedIds =
+      selectionMode === 'all' && selectionExcludedRecordIds.length
+        ? new Set(selectionExcludedRecordIds)
+        : null;
+    setPinnedResultRecords(
+      resultRecords
+        .filter((row, index) => !excludedIds?.has(extractStableRecordId(row, index)))
+        .map((row) => cloneSnapshotValue(row)),
+    );
     setPinnedSelectedRecords(selectedRecords.map((row) => cloneSnapshotValue(row)));
     setPinnedResultSetSnapshot({
       ...resultSetSnapshot,
@@ -151,6 +179,7 @@ export function ExportMediaModal<T>({
     resultRecords,
     resultSetSnapshot,
     selectedRecords,
+    selectionExcludedRecordIds,
     selectionMode,
     setCurrentProgress,
     setExportScope,
@@ -159,6 +188,85 @@ export function ExportMediaModal<T>({
     show,
     taskStatusSignal,
   ]);
+
+  useEffect(() => {
+    if (!show || !streamResultMediaRows) {
+      setSourceResultMediaList([]);
+      setSourceResultMediaLoading(false);
+      setSourceResultRowsScanned(0);
+      return;
+    }
+
+    let cancelled = false;
+    const startedAt = nowMs();
+    const gallery = new Map<string, FileLike>();
+    let scannedRows = 0;
+
+    const publish = () => {
+      if (cancelled) return;
+      setSourceResultMediaList([...gallery.values()]);
+      setSourceResultRowsScanned(scannedRows);
+    };
+
+    const scan = async () => {
+      setSourceResultMediaLoading(true);
+      setSourceResultMediaList([]);
+      setSourceResultRowsScanned(0);
+
+      try {
+        for await (const row of streamResultMediaRows()) {
+          if (cancelled) return;
+          scannedRows += 1;
+          for (const media of extractMedia(
+            [row] as unknown as Tweet[] | User[],
+            includeRetweets,
+            filenamePattern ?? '',
+          )) {
+            gallery.set(media.filename, media);
+          }
+          if (scannedRows % 200 === 0) {
+            publish();
+            await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+          }
+        }
+        publish();
+        recordPerfMetric({
+          kind: 'export',
+          name: 'media-export-source-scan',
+          durationMs: nowMs() - startedAt,
+          value: gallery.size,
+          tags: {
+            rowsScanned: scannedRows,
+            sourceRows: resultMediaSourceCount ?? 0,
+            includeRetweets,
+          },
+        });
+      } finally {
+        if (!cancelled) {
+          setSourceResultMediaLoading(false);
+        }
+      }
+    };
+
+    void scan().catch((error) => {
+      if (!cancelled) {
+        setSourceResultMediaLoading(false);
+      }
+      recordPerfMetric({
+        kind: 'export',
+        name: 'media-export-source-scan-error',
+        durationMs: nowMs() - startedAt,
+        tags: {
+          error: error instanceof Error ? error.message : String(error),
+          rowsScanned: scannedRows,
+        },
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filenamePattern, includeRetweets, resultMediaSourceCount, show, streamResultMediaRows]);
 
   const onProgress: ProgressCallback<FileLike> = (current, total, value) => {
     const now = Date.now();
@@ -255,7 +363,9 @@ export function ExportMediaModal<T>({
               onChange={() => setExportScope('result_set')}
             />
             <span>{t('All current results')}</span>
-            <span class="font-mono opacity-60">({pinnedResultRecords.length})</span>
+            <span class="font-mono opacity-60">
+              ({pinnedResultSetSnapshot?.totalMatches ?? pinnedResultRecords.length})
+            </span>
           </label>
           <label
             class={cx(
@@ -275,6 +385,25 @@ export function ExportMediaModal<T>({
             <span class="font-mono opacity-60">({pinnedSelectedRecords.length})</span>
           </label>
         </div>
+        {sourceResultAvailable && exportScope === 'result_set' ? (
+          <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2 text-xs leading-5 mb-2">
+            <div class="font-semibold">Source-backed media</div>
+            <div>
+              rows scanned:{' '}
+              <span class="font-mono">
+                {sourceResultRowsScanned}
+                {resultMediaSourceCount ? `/${resultMediaSourceCount}` : ''}
+              </span>
+            </div>
+            <div>
+              media URLs:{' '}
+              <span class="font-mono">
+                {mediaList.length}
+                {sourceResultMediaLoading ? ' loading' : ''}
+              </span>
+            </div>
+          </div>
+        ) : null}
         {pinnedResultSetSnapshot ? (
           <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2 text-xs leading-5 mb-2">
             <div class="font-semibold">{t('Pinned result set')}</div>
@@ -462,7 +591,9 @@ export function ExportMediaModal<T>({
           ) : null}
           {mediaList.length > 0 ? null : (
             <div class="flex items-center justify-center h-28 w-full">
-              <p class="text-base-content text-opacity-50">{t('No media selected.')}</p>
+              <p class="text-base-content text-opacity-50">
+                {sourceResultMediaLoading ? 'Loading media...' : t('No media selected.')}
+              </p>
             </div>
           )}
         </div>
@@ -487,17 +618,28 @@ export function ExportMediaModal<T>({
           {t('Cancel')}
         </button>
         <div class="join">
-          <button class="btn join-item pr-2" onClick={() => onCopy()}>
+          <button
+            class={cx('btn join-item pr-2', sourceResultMediaLoading && 'btn-disabled')}
+            onClick={() => onCopy()}
+            disabled={sourceResultMediaLoading}
+          >
             {copied ? t('Copied!') : t('Copy URLs')}
           </button>
-          <button class="btn join-item pl-2" onClick={() => onCopy(true)}>
+          <button
+            class={cx('btn join-item pl-2', sourceResultMediaLoading && 'btn-disabled')}
+            onClick={() => onCopy(true)}
+            disabled={sourceResultMediaLoading}
+          >
             <IconFileDownload />
           </button>
         </div>
         <button
-          class={cx('btn btn-secondary', (loading || mediaList.length === 0) && 'btn-disabled')}
+          class={cx(
+            'btn btn-secondary',
+            (loading || sourceResultMediaLoading || mediaList.length === 0) && 'btn-disabled',
+          )}
           onClick={onExport}
-          disabled={loading || mediaList.length === 0}
+          disabled={loading || sourceResultMediaLoading || mediaList.length === 0}
         >
           {loading && <span class="loading loading-spinner" />}
           {t('Start Export')}

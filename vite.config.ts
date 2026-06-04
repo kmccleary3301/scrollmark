@@ -22,19 +22,6 @@ const localDevUserscriptUrl = `http://localhost:8123/greasemonkey_project/twitte
 const twitterIconPng =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABmklEQVR4Ae3XA4wcARSA4dq2bUQ1g9pRbVtBzai2otpug9pxUttn2753/3m9Ozq/5NsdvvfGM6VKoshE8/ORFbAMbxCGWHzDHjS2sXxPlM0eKYclGoq3w1eIHVGYikaYg6e4ZppgAgQrVBSvDw+IEylIhSAATUyTHIYgFdsUNnAGosAfDMccLMtOchli4g7quFC8FhIhCsRD8Bk1sxMdgVjwxRyUdtDABIgKH9DQNNEkiB1fMB9VbDSwEKLQJ1S1TFQRXhAHYnADy9ETdTEeotAze7tzNJIhCiRBFLpnq/hmzMR65UkVO2WrgaOQPLLW3u6XPDLAVgOl8R5isEhUtHcSdkEoxEBXnN3ZuuMbxCDDnTVQF52xBcEQHX1BaWcNtDLwMpzg6tNtN0RnD5U8XsviGkQnYWih9CWjNBbDHaJBMsZqec8rjV54B1EoFXO0Fh+DrxCFEjBTTdFy6IvNGu4Hf9FXSdGheAUvjZdgLPajqtp3+jl4jVSIAgHYjRZ6fWC0wSpcwScEQZCMUPzEfezEYJQrVRKFOdIAZGq1QBG8EiYAAAAASUVORK5CYII=';
 
-const userscriptRequire = [
-  'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js',
-  'https://cdn.jsdelivr.net/npm/dexie@4.0.11/dist/dexie.min.js',
-  'https://cdn.jsdelivr.net/npm/dexie-export-import@4.1.4/dist/dexie-export-import.js',
-  'https://cdn.jsdelivr.net/npm/file-saver-es@2.0.5/dist/FileSaver.min.js',
-  'https://cdn.jsdelivr.net/npm/i18next@24.2.3/i18next.min.js',
-  'https://cdn.jsdelivr.net/npm/preact@10.26.4/dist/preact.min.js',
-  'https://cdn.jsdelivr.net/npm/preact@10.26.4/hooks/dist/hooks.umd.js',
-  'https://cdn.jsdelivr.net/npm/@preact/signals-core@1.8.0/dist/signals-core.min.js',
-  'https://cdn.jsdelivr.net/npm/@preact/signals@2.0.0/dist/signals.min.js',
-  'https://cdn.jsdelivr.net/npm/@tanstack/table-core@8.21.2/build/umd/index.production.js',
-];
-
 // https://vitejs.dev/config/
 export default defineConfig({
   resolve: {
@@ -44,7 +31,7 @@ export default defineConfig({
   },
   build: {
     emptyOutDir: false,
-    minify: false,
+    minify: isLocalE2EBuild ? false : 'esbuild',
   },
   css: {
     postcss: {
@@ -106,27 +93,13 @@ export default defineConfig({
                 ? localDevUserscriptUrl
                 : 'https://github.com/kmccleary3301/scrollmark/releases/latest/download/scrollmark.user.js',
             }),
-        ...(isLocalE2EBuild ? {} : { require: userscriptRequire }),
       },
       build: {
-        ...(isLocalE2EBuild
-          ? {
-              fileName: localDevUserscriptFileName,
-            }
-          : {
-              fileName: isStoreBuild ? 'scrollmark.store.user.js' : 'scrollmark.user.js',
-              externalGlobals: {
-                dayjs: 'dayjs',
-                dexie: 'Dexie',
-                'dexie-export-import': 'DexieExportImport',
-                'file-saver-es': 'FileSaver',
-                i18next: 'i18next',
-                preact: 'preact',
-                'preact/hooks': 'preactHooks',
-                '@preact/signals': 'preactSignals',
-                '@tanstack/table-core': 'TableCore',
-              },
-            }),
+        fileName: isLocalE2EBuild
+          ? localDevUserscriptFileName
+          : isStoreBuild
+            ? 'scrollmark.store.user.js'
+            : 'scrollmark.user.js',
       },
     }),
   ],

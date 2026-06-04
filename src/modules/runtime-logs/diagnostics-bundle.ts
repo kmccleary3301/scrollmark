@@ -4,6 +4,7 @@ import { zipBlobFiles } from '@/utils/download';
 import { options } from '@/core/options';
 import { db } from '@/core/database';
 import { collectIndexedDbInventory } from '@/core/database/inventory';
+import { readResultSourceDiagnostics } from '@/core/database/result-source-diagnostics';
 import { readPerfDiagnostics } from '@/core/perf/metrics';
 
 type DiagnosticsBuffers = {
@@ -162,6 +163,7 @@ export async function collectDiagnosticsBundle() {
     userscript_manager: readUserscriptManagerInfo(),
     release_readiness: await collectReleaseReadinessReport(),
     performance: readPerfDiagnostics(),
+    result_sources: readResultSourceDiagnostics(),
     raw_capture_stats: readRawStats(),
     raw_events_recent: rawEventsRecent,
     raw_events_count: rawEventsFull.length,
@@ -250,8 +252,28 @@ export async function exportDiagnosticsBundleZip() {
     },
   ];
 
-  await zipBlobFiles(`twe-diagnostics-${now}.zip`, files);
+  return await zipBlobFiles(`twe-diagnostics-${now}.zip`, files);
 }
+
+function diagnosticsHarnessGlobalsEnabled(): boolean {
+  try {
+    return (
+      localStorage.getItem('twe_enable_synthetic_db_tools_v1') === '1' ||
+      location.search.includes('scrollmarkSyntheticDb=1')
+    );
+  } catch {
+    return false;
+  }
+}
+
+function exposeDiagnosticsHarnessGlobals() {
+  if (!diagnosticsHarnessGlobalsEnabled()) return;
+  const globals = globalThis as Record<string, unknown>;
+  globals.__scrollmark_collect_diagnostics_bundle_v1 = collectDiagnosticsBundle;
+  globals.__scrollmark_export_diagnostics_bundle_zip_v1 = exportDiagnosticsBundleZip;
+}
+
+exposeDiagnosticsHarnessGlobals();
 
 export function readRawStats(): Record<string, unknown> {
   try {

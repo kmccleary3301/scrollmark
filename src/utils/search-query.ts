@@ -868,6 +868,12 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
     let lexicalField = token.field?.trim();
     let handledAsFilter = false;
 
+    if (lexicalField && SEARCH_KNOWN_FILTER_KEYS.has(lexicalField)) {
+      filters.push({ name: lexicalField, value: rawValue, negated: token.negated });
+      flushPendingFreeTextTerms();
+      continue;
+    }
+
     if (token.kind === 'term' && rawValue.startsWith('@') && rawValue.length > 1) {
       const value = normalizeTermValue(rawValue.slice(1));
       if (value) {

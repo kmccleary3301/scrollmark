@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 
 import { useTranslation } from '@/i18n';
+import { recordPerfMetric } from '@/core/perf/metrics';
 import { Tweet, Media } from '@/types';
 import {
   extractRetweetedTweet,
@@ -24,6 +25,7 @@ import {
   IconRepeat,
   IconTable,
 } from '@tabler/icons-preact';
+import type { BaseTableAlternateViewDiagnostics } from './base';
 
 type TweetMediaMasonryProps = {
   records: Tweet[];
@@ -31,6 +33,12 @@ type TweetMediaMasonryProps = {
   onOpenMedia: (url: string) => void;
   storageKey?: string;
   fullscreen?: boolean;
+  sourceMode?: boolean;
+  sourceTotalCount?: number;
+  streamSourceRows?: () => AsyncIterable<Tweet>;
+  mediaSourceTotalCount?: number;
+  streamMediaRows?: () => AsyncIterable<Tweet>;
+  onDiagnosticsChange?: (diagnostics: BaseTableAlternateViewDiagnostics | null) => void;
 };
 
 type MasonryItem = {
@@ -66,6 +74,8 @@ const NARROW_COMFORTABLE_CARD_WIDTH = 228;
 const NARROW_COMPACT_CARD_WIDTH = 196;
 const COMFORTABLE_GAP = 16;
 const COMPACT_GAP = 14;
+const SOURCE_SCAN_BATCH_ROWS = 240;
+const SOURCE_INITIAL_MEDIA_TARGET = 72;
 
 function extractOriginalTweetMedia(tweet: Tweet): Media[] {
   if (extractRetweetedTweet(tweet)) {
@@ -152,19 +162,71 @@ function buildStableColumns(
   return columns;
 }
 
+function buildMasonryItemsFromTweet(tweet: Tweet): MasonryItem[] {
+  const mediaList = extractOriginalTweetMedia(tweet);
+  if (!mediaList.length) return [];
+
+  const screenName = extractTweetUserScreenName(tweet);
+  const fullText = extractTweetFullText(tweet).trim();
+  const createdAtLabel = formatDateTime(
+    extractTweetCreatedAtMs(tweet),
+    options.get('dateTimeFormat'),
+  );
+  const tweetUrl = getTweetURL(tweet);
+  const folderName = bookmarkFolderName(tweet);
+
+  return mediaList.map((media, index) => ({
+    id: `${tweet.rest_id}:${media.media_key || media.id_str || index}`,
+    tweet,
+    media,
+    screenName,
+    fullText,
+    createdAtLabel,
+    tweetUrl,
+    previewUrl: mediaPreviewUrl(media),
+    originalUrl: getMediaOriginalUrl(media),
+    aspectRatio: mediaAspectRatio(media),
+    bookmarkFolderName: folderName,
+    favoriteCount: Number(tweet.legacy?.favorite_count || 0),
+    retweetCount: Number(tweet.legacy?.retweet_count || 0),
+    bookmarkCount: Number(tweet.legacy?.bookmark_count || 0),
+    replyCount: Number(tweet.legacy?.reply_count || 0),
+    durationLabel:
+      media.type === 'photo' ? '' : formatVideoDuration(media.video_info?.duration_millis),
+  }));
+}
+
 export function TweetMediaMasonry({
   records,
   scrollParentRef,
   onOpenMedia,
   storageKey,
   fullscreen,
+  sourceMode,
+  sourceTotalCount = 0,
+  streamSourceRows,
+  mediaSourceTotalCount,
+  streamMediaRows,
+  onDiagnosticsChange,
 }: TweetMediaMasonryProps) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const firstItemIdRef = useRef('');
+  const iteratorRef = useRef<AsyncIterator<Tweet> | null>(null);
+  const sourceGenerationRef = useRef(0);
+  const loadingSourceRef = useRef(false);
+  const exhaustedSourceRef = useRef(false);
+  const scannedSourceRowsRef = useRef(0);
   const [visibleCount, setVisibleCount] = useState(INITIAL_BATCH);
   const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [containerWidth, setContainerWidth] = useState(0);
+  const [sourceItems, setSourceItems] = useState<MasonryItem[]>([]);
+  const [scannedSourceRows, setScannedSourceRows] = useState(0);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceExhausted, setSourceExhausted] = useState(false);
+  const activeStreamRows = streamMediaRows ?? streamSourceRows;
+  const activeSourceTotalCount = mediaSourceTotalCount ?? sourceTotalCount;
+  const useSourceStream = Boolean(sourceMode && activeStreamRows);
 
   useEffect(() => {
     try {
@@ -187,41 +249,105 @@ export function TweetMediaMasonry({
     }
   }, [density, storageKey]);
 
-  const items = useMemo<MasonryItem[]>(() => {
-    return records.flatMap((tweet) => {
-      const mediaList = extractOriginalTweetMedia(tweet);
-      if (!mediaList.length) return [];
+  const arrayItems = useMemo<MasonryItem[]>(
+    () => records.flatMap((tweet) => buildMasonryItemsFromTweet(tweet)),
+    [records],
+  );
+  const items = useSourceStream ? sourceItems : arrayItems;
 
-      const screenName = extractTweetUserScreenName(tweet);
-      const fullText = extractTweetFullText(tweet).trim();
-      const createdAtLabel = formatDateTime(
-        extractTweetCreatedAtMs(tweet),
-        options.get('dateTimeFormat'),
-      );
-      const tweetUrl = getTweetURL(tweet);
-      const folderName = bookmarkFolderName(tweet);
+  const loadSourceUntil = async (targetMediaCount: number) => {
+    if (
+      !useSourceStream ||
+      !activeStreamRows ||
+      loadingSourceRef.current ||
+      exhaustedSourceRef.current
+    ) {
+      return;
+    }
+    loadingSourceRef.current = true;
+    setSourceLoading(true);
+    const sourceGeneration = sourceGenerationRef.current;
+    const beforeRows = scannedSourceRowsRef.current;
+    let scannedRows = 0;
+    let appendedItems = 0;
+    try {
+      const iterator = iteratorRef.current ?? activeStreamRows()[Symbol.asyncIterator]();
+      iteratorRef.current = iterator;
+      const nextItems: MasonryItem[] = [];
+      while (
+        sourceItems.length + nextItems.length < targetMediaCount &&
+        scannedRows < SOURCE_SCAN_BATCH_ROWS
+      ) {
+        if (sourceGenerationRef.current !== sourceGeneration) return;
+        const next = await iterator.next();
+        if (sourceGenerationRef.current !== sourceGeneration) return;
+        if (next.done) {
+          exhaustedSourceRef.current = true;
+          setSourceExhausted(true);
+          break;
+        }
+        scannedRows += 1;
+        scannedSourceRowsRef.current += 1;
+        if (scannedRows % 12 === 0) {
+          setScannedSourceRows(scannedSourceRowsRef.current);
+        }
+        const tweetItems = buildMasonryItemsFromTweet(next.value);
+        if (tweetItems.length) {
+          nextItems.push(...tweetItems);
+          appendedItems += tweetItems.length;
+        }
+      }
+      if (nextItems.length) {
+        setSourceItems((current) => {
+          if (sourceGenerationRef.current !== sourceGeneration) return current;
+          const existing = new Set(current.map((item) => item.id));
+          const deduped = nextItems.filter((item) => {
+            if (existing.has(item.id)) return false;
+            existing.add(item.id);
+            return true;
+          });
+          return deduped.length ? [...current, ...deduped] : current;
+        });
+      }
+    } finally {
+      if (sourceGenerationRef.current === sourceGeneration) {
+        loadingSourceRef.current = false;
+        setScannedSourceRows(scannedSourceRowsRef.current);
+        setSourceLoading(false);
+      }
+      recordPerfMetric({
+        kind: 'viewer',
+        name: 'media-source-scan',
+        value: appendedItems,
+        tags: {
+          scannedRows,
+          scannedRowsTotal: scannedSourceRowsRef.current,
+          scannedRowsBefore: beforeRows,
+          mediaItems: sourceItems.length + appendedItems,
+          targetMediaCount,
+          exhausted: exhaustedSourceRef.current,
+          sourceTotalCount: activeSourceTotalCount,
+        },
+      });
+    }
+  };
 
-      return mediaList.map((media, index) => ({
-        id: `${tweet.rest_id}:${media.media_key || media.id_str || index}`,
-        tweet,
-        media,
-        screenName,
-        fullText,
-        createdAtLabel,
-        tweetUrl,
-        previewUrl: mediaPreviewUrl(media),
-        originalUrl: getMediaOriginalUrl(media),
-        aspectRatio: mediaAspectRatio(media),
-        bookmarkFolderName: folderName,
-        favoriteCount: Number(tweet.legacy?.favorite_count || 0),
-        retweetCount: Number(tweet.legacy?.retweet_count || 0),
-        bookmarkCount: Number(tweet.legacy?.bookmark_count || 0),
-        replyCount: Number(tweet.legacy?.reply_count || 0),
-        durationLabel:
-          media.type === 'photo' ? '' : formatVideoDuration(media.video_info?.duration_millis),
-      }));
-    });
-  }, [records]);
+  useEffect(() => {
+    sourceGenerationRef.current += 1;
+    iteratorRef.current = null;
+    loadingSourceRef.current = false;
+    exhaustedSourceRef.current = false;
+    scannedSourceRowsRef.current = 0;
+    setSourceItems([]);
+    setScannedSourceRows(0);
+    setSourceLoading(false);
+    setSourceExhausted(false);
+  }, [activeSourceTotalCount, storageKey, useSourceStream]);
+
+  useEffect(() => {
+    if (!useSourceStream) return;
+    void loadSourceUntil(SOURCE_INITIAL_MEDIA_TARGET);
+  }, [activeSourceTotalCount, sourceItems.length, useSourceStream]);
 
   const firstItemId = items[0]?.id || '';
 
@@ -250,13 +376,16 @@ export function TweetMediaMasonry({
         scrollParent.scrollHeight - (scrollParent.scrollTop + scrollParent.clientHeight);
       if (remaining <= SCROLL_THRESHOLD_PX) {
         setVisibleCount((current) => Math.min(items.length, current + BATCH_SIZE));
+        if (useSourceStream && !sourceExhausted && items.length <= visibleCount + BATCH_SIZE) {
+          void loadSourceUntil(visibleCount + BATCH_SIZE + SOURCE_INITIAL_MEDIA_TARGET);
+        }
       }
     };
 
     maybeGrow();
     scrollParent.addEventListener('scroll', maybeGrow, { passive: true });
     return () => scrollParent.removeEventListener('scroll', maybeGrow);
-  }, [items.length, scrollParentRef]);
+  }, [items.length, scrollParentRef, sourceExhausted, useSourceStream, visibleCount]);
 
   useLayoutEffect(() => {
     const node = rootRef.current;
@@ -303,42 +432,114 @@ export function TweetMediaMasonry({
     () => buildStableColumns(visibleItems, columnCount, columnWidth, density),
     [columnCount, columnWidth, density, visibleItems],
   );
+  const renderedEnd = visibleItems.length;
+  const renderedStart = renderedEnd ? 1 : 0;
+  const sourceStatus = sourceLoading ? 'loading' : sourceExhausted ? 'complete' : 'idle';
+  const sourceTotalLabel = activeSourceTotalCount || '?';
+  const primaryStatus = useSourceStream
+    ? sourceLoading
+      ? `loading source ${scannedSourceRows}/${sourceTotalLabel}`
+      : `source ${sourceStatus} ${scannedSourceRows}/${sourceTotalLabel}`
+    : `media ${items.length}`;
+  const diagnosticsActions = useMemo(
+    () => (
+      <div class="join">
+        <button
+          class={`btn join-item btn-xs ${density === 'comfortable' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setDensity('comfortable')}
+          title="Comfortable density"
+        >
+          <IconTable size={14} />
+        </button>
+        <button
+          class={`btn join-item btn-xs ${density === 'compact' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setDensity('compact')}
+          title="Compact density"
+        >
+          <IconLayoutColumns size={14} />
+        </button>
+      </div>
+    ),
+    [density],
+  );
+  const diagnostics = useMemo<BaseTableAlternateViewDiagnostics>(
+    () => ({
+      primary: primaryStatus,
+      details: [
+        {
+          key: 'rendered',
+          label: `rendered ${visibleItems.length}/${items.length} (window ${renderedStart}-${renderedEnd})`,
+          minWidth: 'sm',
+        },
+        {
+          key: 'loaded-media',
+          label: `loaded media ${items.length}`,
+          minWidth: 'md',
+        },
+        {
+          key: 'source-rows',
+          label: useSourceStream
+            ? `source rows ${scannedSourceRows}/${sourceTotalLabel} ${sourceStatus}`
+            : `source rows ${records.length}`,
+          minWidth: 'lg',
+        },
+        {
+          key: 'layout',
+          label: `layout ${columnCount} cols @ ${Math.round(columnWidth)}px`,
+          minWidth: 'xl',
+        },
+        {
+          key: 'scope',
+          label: 'original tweet attachments only',
+          minWidth: 'xl',
+        },
+      ],
+      actions: diagnosticsActions,
+    }),
+    [
+      columnCount,
+      columnWidth,
+      diagnosticsActions,
+      items.length,
+      primaryStatus,
+      records.length,
+      renderedEnd,
+      renderedStart,
+      scannedSourceRows,
+      sourceStatus,
+      sourceTotalLabel,
+      useSourceStream,
+      visibleItems.length,
+    ],
+  );
+
+  useEffect(() => {
+    onDiagnosticsChange?.(diagnostics);
+  }, [diagnostics, onDiagnosticsChange]);
+
+  useEffect(() => {
+    return () => onDiagnosticsChange?.(null);
+  }, [onDiagnosticsChange]);
 
   if (!items.length) {
     return (
-      <div class="flex h-[320px] items-center justify-center text-sm opacity-60">
-        {t('No media available.')}
+      <div ref={rootRef} class="w-full min-w-0 px-3 py-3">
+        <div class="flex h-[320px] items-center justify-center text-sm opacity-60">
+          {sourceLoading ? (
+            <span class="inline-flex items-center gap-2">
+              <span class="loading loading-spinner loading-sm" />
+              Loading media.
+            </span>
+          ) : (
+            t('No media available.')
+          )}
+        </div>
       </div>
     );
   }
 
   return (
     <div ref={rootRef} class="w-full min-w-0 px-3 py-3">
-      <div class="mb-3 flex items-center justify-between gap-3 text-[11px] font-mono opacity-70">
-        <div class="flex items-center gap-3">
-          <span>
-            media {visibleItems.length}/{items.length}
-          </span>
-          <span>original tweet attachments only</span>
-        </div>
-        <div class="join">
-          <button
-            class={`btn join-item btn-xs ${density === 'comfortable' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setDensity('comfortable')}
-            title="Comfortable density"
-          >
-            <IconTable size={14} />
-          </button>
-          <button
-            class={`btn join-item btn-xs ${density === 'compact' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setDensity('compact')}
-            title="Compact density"
-          >
-            <IconLayoutColumns size={14} />
-          </button>
-        </div>
-      </div>
-
       <div class="flex items-start" style={{ gap: `${gapPx}px` }}>
         {columns.map((column, columnIndex) => (
           <div key={`column-${columnIndex}`} class="min-w-0 flex-1">

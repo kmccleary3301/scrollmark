@@ -1,4 +1,7 @@
 import { SortingState } from '@tanstack/table-core';
+import type { ResultSourceDescriptor } from '@/core/database/result-source';
+
+export const RESULT_SET_SNAPSHOT_ID_LIMIT = 5000;
 
 export type ResultSetSnapshot = {
   resultSetId: string;
@@ -9,6 +12,9 @@ export type ResultSetSnapshot = {
   sort: string;
   totalMatches: number;
   ids: string[];
+  idsTotalCount: number;
+  idsTruncated?: boolean;
+  sourceDescriptor?: ResultSourceDescriptor;
   warnings: string[];
 };
 
@@ -64,6 +70,13 @@ export function extractStableRecordId(record: unknown, index: number): string {
   const id = baseId && contextParts.length ? `${baseId}::${contextParts.join('::')}` : baseId;
 
   return id || `row-${index}`;
+}
+
+export function extractHydrationRecordId(rowId: string): string {
+  const normalized = String(rowId || '').trim();
+  if (!normalized) return '';
+  const [baseId] = normalized.split('::');
+  return baseId || normalized;
 }
 
 function readRecordPath(record: unknown, path: string): unknown {
@@ -139,9 +152,17 @@ export function createResultSetSnapshot(args: {
   queryText: string;
   sort: string;
   ids: string[];
+  idsTruncated?: boolean;
+  sourceDescriptor?: ResultSourceDescriptor;
   totalMatches: number;
   warnings: string[];
 }): ResultSetSnapshot {
+  const ids =
+    args.sourceDescriptor && args.idsTruncated
+      ? []
+      : args.ids.slice(0, RESULT_SET_SNAPSHOT_ID_LIMIT);
+  const idsTruncated = Boolean(args.idsTruncated) || args.ids.length > RESULT_SET_SNAPSHOT_ID_LIMIT;
+
   return {
     resultSetId: createResultSetId(),
     scope: 'table',
@@ -150,7 +171,10 @@ export function createResultSetSnapshot(args: {
     queryText: args.queryText,
     sort: args.sort,
     totalMatches: args.totalMatches,
-    ids: [...args.ids],
+    ids,
+    idsTotalCount: args.ids.length,
+    idsTruncated,
+    sourceDescriptor: args.sourceDescriptor,
     warnings: [...args.warnings],
   };
 }

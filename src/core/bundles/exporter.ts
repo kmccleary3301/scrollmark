@@ -25,6 +25,7 @@ export interface BundleExportOptions {
   sort?: string;
   includeOriginalMetadata?: boolean;
   compressionLevel?: 0 | 1 | 6;
+  totalRecords?: number;
   onProgress?: (progress: BundleExportProgress) => void;
 }
 
@@ -128,48 +129,61 @@ async function buildRecordEnvelope<T>(
   };
 }
 
-function countBundleRecords(records: BundleRecordEnvelope[]): BundleManifestCounts {
-  return records.reduce<BundleManifestCounts>(
-    (acc, record) => {
-      acc.records += 1;
-      if (record.kind === 'tweet') acc.tweets += 1;
-      if (record.kind === 'user') acc.users += 1;
-      if (record.kind === 'social_edge') acc.socialEdges += 1;
-      if (record.kind === 'capture') acc.captures += 1;
-      acc.mediaBlobs += 0;
-      return acc;
-    },
-    { records: 0, tweets: 0, users: 0, socialEdges: 0, captures: 0, mediaBlobs: 0 },
-  );
+function emptyBundleRecordCounts(): BundleManifestCounts {
+  return { records: 0, tweets: 0, users: 0, socialEdges: 0, captures: 0, mediaBlobs: 0 };
 }
 
-export async function createCanonicalBundleZip<T>(
-  rows: Array<BundleExportSourceRow<T>>,
+function addBundleRecordCount(counts: BundleManifestCounts, record: BundleRecordEnvelope): void {
+  counts.records += 1;
+  if (record.kind === 'tweet') counts.tweets += 1;
+  if (record.kind === 'user') counts.users += 1;
+  if (record.kind === 'social_edge') counts.socialEdges += 1;
+  if (record.kind === 'capture') counts.captures += 1;
+  counts.mediaBlobs += 0;
+}
+
+export async function createCanonicalBundleZipFromRows<T>(
+  rows: Iterable<BundleExportSourceRow<T>> | AsyncIterable<BundleExportSourceRow<T>>,
   options: BundleExportOptions,
 ): Promise<{ filename: string; bytes: Uint8Array; manifest: BundleManifest }> {
   const now = Date.now();
   const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const expectedTotalRecords = Math.max(0, Math.floor(Number(options.totalRecords || 0)));
   const reportProgress = (phase: BundleExportProgress['phase'], processedRecords: number) => {
     options.onProgress?.({
       phase,
       processedRecords,
-      totalRecords: rows.length,
+      totalRecords: expectedTotalRecords || processedRecords,
       elapsedMs: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt,
     });
   };
   const bundleId = await createBundleId(
-    `${options.title}:${options.scope}:${options.queryText || ''}:${now}:${rows.length}`,
+    `${options.title}:${options.scope}:${options.queryText || ''}:${now}:${expectedTotalRecords}`,
   );
-  const records: BundleRecordEnvelope[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
+  const counts = emptyBundleRecordCounts();
+  const recordsJsonlChunks: string[] = [];
+  const mediaUrlLines: string[] = [];
+  let processedRecords = 0;
+  for await (const row of rows) {
     if (!row) continue;
-    records.push(await buildRecordEnvelope(bundleId, row, options));
-    if (index === 0 || index + 1 === rows.length || (index + 1) % 100 === 0) {
-      reportProgress('envelope', index + 1);
+    const record = await buildRecordEnvelope(bundleId, row, options);
+    addBundleRecordCount(counts, record);
+    recordsJsonlChunks.push(`${JSON.stringify(record)}\n`);
+    for (const media of record.mediaRefs || []) {
+      if (media.url) {
+        mediaUrlLines.push(media.url);
+      }
+    }
+    processedRecords += 1;
+    if (
+      processedRecords === 1 ||
+      processedRecords === expectedTotalRecords ||
+      processedRecords % 100 === 0
+    ) {
+      reportProgress('envelope', processedRecords);
     }
   }
-  const recordsJsonl = records.map((record) => JSON.stringify(record)).join('\n') + '\n';
+  const recordsJsonl = recordsJsonlChunks.join('');
   const privacy = buildBundlePrivacySummary(SAFE_SHARED_DEFAULT_PRIVACY);
   const files: BundleFileManifestEntry[] = [
     {
@@ -186,10 +200,6 @@ export async function createCanonicalBundleZip<T>(
     },
   ];
 
-  const mediaUrlLines = records
-    .flatMap((record) => record.mediaRefs || [])
-    .map((media) => media.url)
-    .filter((url): url is string => !!url);
   const mediaUrlsText = mediaUrlLines.join('\n') + (mediaUrlLines.length ? '\n' : '');
   if (mediaUrlLines.length) {
     files.push({
@@ -212,7 +222,7 @@ export async function createCanonicalBundleZip<T>(
       exportedAt: now,
     },
     privacy,
-    counts: countBundleRecords(records),
+    counts,
     files,
   };
 
@@ -223,7 +233,7 @@ export async function createCanonicalBundleZip<T>(
       bytes: new TextEncoder().encode(JSON.stringify(manifest, undefined, 2)).byteLength,
     };
   }
-  reportProgress('manifest', records.length);
+  reportProgress('manifest', processedRecords);
 
   const compressionLevel = options.compressionLevel ?? 1;
   const entries = [
@@ -241,15 +251,25 @@ export async function createCanonicalBundleZip<T>(
   if (mediaUrlLines.length) {
     entries.push({ path: 'media/media-urls.txt', data: mediaUrlsText, level: compressionLevel });
   }
-  reportProgress('zip', records.length);
+  reportProgress('zip', processedRecords);
 
   const result = {
     filename: `twe-bundle-${normalizeFilename(options.title)}-${now}.zip`,
     bytes: createBundleZip(entries),
     manifest,
   };
-  reportProgress('done', records.length);
+  reportProgress('done', processedRecords);
   return result;
+}
+
+export async function createCanonicalBundleZip<T>(
+  rows: Array<BundleExportSourceRow<T>>,
+  options: BundleExportOptions,
+): Promise<{ filename: string; bytes: Uint8Array; manifest: BundleManifest }> {
+  return createCanonicalBundleZipFromRows(rows, {
+    ...options,
+    totalRecords: options.totalRecords ?? rows.length,
+  });
 }
 
 export async function exportCanonicalBundleZip<T>(

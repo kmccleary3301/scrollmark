@@ -18,6 +18,23 @@ export type SearchWorkerRequest =
       records: SearchWorkerRecord[];
     }
   | {
+      type: 'search:begin-corpus';
+      requestId: string;
+      scopeKey: string;
+      expectedCount?: number;
+    }
+  | {
+      type: 'search:append-corpus';
+      requestId: string;
+      scopeKey: string;
+      records: SearchWorkerRecord[];
+    }
+  | {
+      type: 'search:commit-corpus';
+      requestId: string;
+      scopeKey: string;
+    }
+  | {
       type: 'search:query';
       requestId: string;
       scopeKey: string;

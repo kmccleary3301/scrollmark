@@ -11,9 +11,13 @@ import { AdvancedTableSearchResult, runAdvancedTableSearch } from '@/utils/advan
 import { SearchWorkerClient } from '@/core/search/search-client';
 import { incrementPerfCounter, nowMs, recordPerfMetric } from '@/core/perf/metrics';
 import type { SearchDocumentRow } from '@/core/database/manager';
+import type { SearchWorkerRecord } from '@/core/search/contracts';
+import type { ResultEntityType, ResultSourceDescriptor } from '@/core/database/result-source';
+import { createSearchResultSourceAdapter } from '@/core/database/id-result-sources';
 import {
   collectRecordLookupIds,
   createResultSetSnapshot,
+  extractHydrationRecordId,
   extractStableRecordId,
   ResultSetSnapshot,
   resolveOrderedAvailableRecords,
@@ -39,6 +43,23 @@ type UseResultSetControllerProps<T> = {
   onFullscreenChange?: (value: boolean) => void;
   records: T[];
   searchDocuments?: SearchDocumentRow[];
+  searchDocumentsLoading?: boolean;
+  searchDocumentsLoaded?: boolean;
+  searchDocumentTotalCount?: number;
+  searchDocumentsBlockedReason?: string;
+  loadSearchDocuments?: () => Promise<SearchDocumentRow[]>;
+  loadSearchDocumentChunks?: (args: {
+    chunkSize?: number;
+    isCancelled?: () => boolean;
+    onChunk: (
+      documents: SearchDocumentRow[],
+      progress: { loaded: number; totalCount: number },
+    ) => void;
+  }) => Promise<{ loaded: number; totalCount: number; cancelled: boolean }>;
+  folderScopeSourceBacked?: boolean;
+  resultSourceDescriptor?: ResultSourceDescriptor;
+  resultSourceTotalCount?: number;
+  resultEntityType?: ResultEntityType;
   hydrateRecordsByIds?: (ids: string[]) => Promise<T[]>;
   columns: ColumnDef<T>[];
   alternateViews?: AlternateViewDef[];
@@ -47,13 +68,33 @@ type UseResultSetControllerProps<T> = {
 type AsyncSearchState<T> = {
   key: string;
   pending: boolean;
+  phase: SearchReadinessPhase;
   result: AdvancedTableSearchResult<T> | null;
+  resultIds?: string[];
   error?: string;
+};
+
+export type SearchReadinessPhase =
+  | 'idle'
+  | 'unavailable'
+  | 'preparing-corpus'
+  | 'ready'
+  | 'querying'
+  | 'degraded'
+  | 'cancelled'
+  | 'failed';
+
+export type SearchReadinessState = {
+  phase: SearchReadinessPhase;
+  label: string;
+  detail?: string;
+  cancellable: boolean;
 };
 
 const MAX_QUERY_HYDRATE_RECORDS = 1200;
 const MAX_FOLDER_HYDRATE_RECORDS = 6000;
 const FOLDER_HYDRATE_BATCH_SIZE = 320;
+const SEARCH_DOCUMENT_CORPUS_CHUNK_SIZE = 1000;
 
 type FolderHydrationAttemptState = {
   key: string;
@@ -106,6 +147,29 @@ function createSearchRequestId(): string {
     return `search-${crypto.randomUUID()}`;
   }
   return `search-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function searchReadinessLabel(phase: SearchReadinessPhase): string {
+  switch (phase) {
+    case 'idle':
+      return 'search idle';
+    case 'unavailable':
+      return 'search worker unavailable';
+    case 'preparing-corpus':
+      return 'preparing search index';
+    case 'ready':
+      return 'search ready';
+    case 'querying':
+      return 'querying local index';
+    case 'degraded':
+      return 'search degraded';
+    case 'cancelled':
+      return 'search cancelled';
+    case 'failed':
+      return 'search failed';
+    default:
+      return 'search';
+  }
 }
 
 function readRecordPath(record: unknown, path: string): unknown {
@@ -207,6 +271,16 @@ function createWorkerSearchRecordFromDocument(document: SearchDocumentRow): unkn
   };
 }
 
+function createWorkerSearchRowsFromDocuments(
+  documents: SearchDocumentRow[],
+  offset: number,
+): SearchWorkerRecord[] {
+  return documents.map((document, index) => ({
+    id: document.raw_ref_key || document.entity_id || `search-doc-${offset + index}`,
+    record: createWorkerSearchRecordFromDocument(document),
+  }));
+}
+
 export function useResultSetController<T>({
   title,
   viewStateKey,
@@ -214,6 +288,16 @@ export function useResultSetController<T>({
   onFullscreenChange,
   records,
   searchDocuments,
+  searchDocumentsLoading = false,
+  searchDocumentsLoaded = false,
+  searchDocumentTotalCount = 0,
+  searchDocumentsBlockedReason,
+  loadSearchDocuments,
+  loadSearchDocumentChunks,
+  folderScopeSourceBacked = false,
+  resultSourceDescriptor,
+  resultSourceTotalCount,
+  resultEntityType,
   hydrateRecordsByIds,
   columns,
   alternateViews,
@@ -242,7 +326,17 @@ export function useResultSetController<T>({
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const hasSearchQuery = normalizedSearchQuery.length > 0;
   const hasFolderScope = selectedFolders.length > 0;
+  const folderScopeUsesSource = hasFolderScope && folderScopeSourceBacked && !hasSearchQuery;
   const needsWorkerSearch = hasSearchQuery;
+  const shouldUseSearchDocumentCorpus =
+    (hasSearchQuery || (hasFolderScope && !folderScopeUsesSource)) &&
+    (searchDocumentsLoaded || Boolean(searchDocuments?.length));
+  const shouldPrepareWorkerCorpus = hasSearchQuery && shouldUseSearchDocumentCorpus;
+  const shouldStreamSearchDocumentCorpus =
+    shouldPrepareWorkerCorpus &&
+    !searchDocuments?.length &&
+    searchDocumentTotalCount > 0 &&
+    Boolean(loadSearchDocumentChunks);
   const searchDebounceMs = useMemo(() => {
     const trimmed = searchQuery.trim();
     if (!trimmed) return 60;
@@ -270,11 +364,11 @@ export function useResultSetController<T>({
     [title, viewStateKey],
   );
   const scopeKey = useMemo(() => {
-    if (searchDocuments?.length) {
-      return `${resolvedViewStateKey}:search-documents:${searchDocuments.length}`;
+    if (searchDocuments?.length || searchDocumentTotalCount > 0) {
+      return `${resolvedViewStateKey}:search-documents:${searchDocumentTotalCount || searchDocuments?.length || 0}`;
     }
     return `${resolvedViewStateKey}:records:${records.length}`;
-  }, [records.length, resolvedViewStateKey, searchDocuments?.length]);
+  }, [records.length, resolvedViewStateKey, searchDocumentTotalCount, searchDocuments?.length]);
   const selectedFolderKey = useMemo(() => [...selectedFolders].sort().join(','), [selectedFolders]);
 
   const recordIds = useMemo(
@@ -296,6 +390,9 @@ export function useResultSetController<T>({
         last?.updated_at_ms || '',
       ].join(':');
     }
+    if (shouldStreamSearchDocumentCorpus) {
+      return [scopeKey, 'docs-stream', searchDocumentTotalCount].join(':');
+    }
 
     return [
       scopeKey,
@@ -304,7 +401,14 @@ export function useResultSetController<T>({
       recordIds[0] || '',
       recordIds[recordIds.length - 1] || '',
     ].join(':');
-  }, [recordIds, records.length, scopeKey, searchDocuments]);
+  }, [
+    recordIds,
+    records.length,
+    scopeKey,
+    searchDocumentTotalCount,
+    searchDocuments,
+    shouldStreamSearchDocumentCorpus,
+  ]);
 
   const asyncSearchKey = `${corpusIdentityKey}:${normalizedSearchQuery}:${selectedFolderKey}`;
 
@@ -330,6 +434,20 @@ export function useResultSetController<T>({
   }, [recordById]);
 
   useEffect(() => {
+    recordPerfMetric({
+      kind: 'viewer',
+      name: 'table-record-lookup-ids',
+      value: recordById.size,
+      tags: {
+        title,
+        viewStateKey: viewStateKey || '',
+        records: records.length,
+        searchHydratedRecords: searchHydratedRecords.length,
+      },
+    });
+  }, [recordById.size, records.length, searchHydratedRecords.length, title, viewStateKey]);
+
+  useEffect(() => {
     setSearchHydratedRecords([]);
     setFolderHydrationAttemptState({ key: '', ids: new Set() });
     activeFolderHydrationKeyRef.current = '';
@@ -339,32 +457,87 @@ export function useResultSetController<T>({
     completedSearchKeyRef.current = '';
   }, [scopeKey]);
 
-  const searchDocumentCorpusRows = useMemo(
-    () =>
+  const searchDocumentCorpusRows = useMemo(() => {
+    if (!shouldPrepareWorkerCorpus) return [];
+    return (
       searchDocuments?.map((document, index) => ({
         id: document.raw_ref_key || document.entity_id || `search-doc-${index}`,
         record: createWorkerSearchRecordFromDocument(document),
-      })) ?? [],
-    [searchDocuments],
-  );
+      })) ?? []
+    );
+  }, [searchDocuments, shouldPrepareWorkerCorpus]);
 
-  const recordCorpusRows = useMemo(
-    () =>
-      records.map((record, index) => ({
-        id: recordIds[index] || `row-${index}`,
-        record: createWorkerSearchRecord(record),
-      })),
-    [recordIds, records],
-  );
+  const recordCorpusRows = useMemo(() => {
+    if (!hasSearchQuery || shouldUseSearchDocumentCorpus) return [];
+    return records.map((record, index) => ({
+      id: recordIds[index] || `row-${index}`,
+      record: createWorkerSearchRecord(record),
+    }));
+  }, [hasSearchQuery, recordIds, records, shouldUseSearchDocumentCorpus]);
 
-  const workerCorpusRows = searchDocuments?.length ? searchDocumentCorpusRows : recordCorpusRows;
+  const workerCorpusRows = shouldUseSearchDocumentCorpus
+    ? searchDocumentCorpusRows
+    : recordCorpusRows;
   const workerCorpusRowsRef = useRef(workerCorpusRows);
   const selectedFoldersRef = useRef(selectedFolders);
   const hydrateRecordsByIdsRef = useRef(hydrateRecordsByIds);
 
   useEffect(() => {
+    recordPerfMetric({
+      kind: 'search',
+      name: 'worker-corpus-candidates',
+      value: workerCorpusRows.length,
+      tags: {
+        title,
+        viewStateKey: viewStateKey || '',
+        source: shouldUseSearchDocumentCorpus ? 'search-documents' : 'records',
+        records: records.length,
+        searchDocuments: searchDocuments?.length ?? 0,
+        searchDocumentTotalCount,
+        searchDocumentsLoaded,
+        searchDocumentsLoading,
+        searchDocumentsBlocked: Boolean(searchDocumentsBlockedReason),
+      },
+    });
+  }, [
+    records.length,
+    searchDocuments?.length,
+    searchDocumentTotalCount,
+    searchDocumentsBlockedReason,
+    searchDocumentsLoaded,
+    searchDocumentsLoading,
+    shouldUseSearchDocumentCorpus,
+    title,
+    viewStateKey,
+    workerCorpusRows.length,
+  ]);
+
+  useEffect(() => {
     workerCorpusRowsRef.current = workerCorpusRows;
   }, [workerCorpusRows]);
+
+  useEffect(() => {
+    if (!hasSearchQuery || !loadSearchDocuments || searchDocumentsBlockedReason) {
+      return;
+    }
+    if (searchDocumentsLoaded || searchDocumentsLoading || searchDocuments?.length) return;
+    void loadSearchDocuments().catch((error) => {
+      recordPerfMetric({
+        kind: 'search',
+        name: 'lazy-search-documents-error',
+        tags: { error: error instanceof Error ? error.message : String(error) },
+      });
+    });
+  }, [
+    hasFolderScope,
+    hasSearchQuery,
+    folderScopeUsesSource,
+    loadSearchDocuments,
+    searchDocumentsBlockedReason,
+    searchDocuments?.length,
+    searchDocumentsLoaded,
+    searchDocumentsLoading,
+  ]);
 
   useEffect(() => {
     selectedFoldersRef.current = selectedFolders;
@@ -375,7 +548,9 @@ export function useResultSetController<T>({
   }, [hydrateRecordsByIds]);
 
   const folderScopedDocuments = useMemo(() => {
-    if (hasSearchQuery || !hasFolderScope || !searchDocuments?.length) return [];
+    if (folderScopeUsesSource || hasSearchQuery || !hasFolderScope || !searchDocuments?.length) {
+      return [];
+    }
     const folderIds = new Set(selectedFolders);
     return searchDocuments
       .filter((document) => document.folder_id && folderIds.has(document.folder_id))
@@ -387,7 +562,7 @@ export function useResultSetController<T>({
           left.raw_ref_key || left.entity_id,
         );
       });
-  }, [hasFolderScope, hasSearchQuery, searchDocuments, selectedFolders]);
+  }, [folderScopeUsesSource, hasFolderScope, hasSearchQuery, searchDocuments, selectedFolders]);
 
   const folderScopedDocumentIds = useMemo(
     () =>
@@ -408,6 +583,7 @@ export function useResultSetController<T>({
   useEffect(() => {
     if (
       hasSearchQuery ||
+      folderScopeUsesSource ||
       !hasFolderScope ||
       !folderScopedDocumentIds.length ||
       !hydrateRecordsByIds
@@ -504,6 +680,7 @@ export function useResultSetController<T>({
   }, [
     folderHydrationKey,
     folderScopedDocumentIds,
+    folderScopeUsesSource,
     hasFolderScope,
     hasSearchQuery,
     hydrateRecordsByIds,
@@ -528,6 +705,7 @@ export function useResultSetController<T>({
   useEffect(() => {
     const client = searchClientRef.current;
     if (
+      !hasSearchQuery ||
       !client?.isAvailable() ||
       !workerCorpusRowsRef.current.length ||
       readyCorpusKeyRef.current === corpusIdentityKey ||
@@ -580,7 +758,7 @@ export function useResultSetController<T>({
       cancelled = true;
       globalThis.clearTimeout(timeoutHandle);
     };
-  }, [corpusIdentityKey, scopeKey]);
+  }, [corpusIdentityKey, hasSearchQuery, scopeKey]);
 
   useEffect(() => {
     if (!needsWorkerSearch) {
@@ -590,7 +768,28 @@ export function useResultSetController<T>({
       return;
     }
 
+    if (searchDocumentsBlockedReason) {
+      setAsyncSearchState({
+        key: asyncSearchKey,
+        pending: false,
+        phase: 'degraded',
+        result: createEmptySearchResult<T>(normalizedSearchQuery, [searchDocumentsBlockedReason]),
+        error: searchDocumentsBlockedReason,
+      });
+      incrementPerfCounter('search:large-corpus-blocked');
+      return;
+    }
+
     const client = searchClientRef.current;
+    if (loadSearchDocuments && !searchDocumentsLoaded && !searchDocuments?.length) {
+      setAsyncSearchState({
+        key: asyncSearchKey,
+        pending: true,
+        phase: 'preparing-corpus',
+        result: createEmptySearchResult<T>(normalizedSearchQuery),
+      });
+      return;
+    }
     if (completedSearchKeyRef.current === asyncSearchKey) {
       return;
     }
@@ -603,6 +802,7 @@ export function useResultSetController<T>({
     latestSearchRequestIdRef.current = requestId;
     const startedAt = nowMs();
     const queryText = normalizedSearchQuery;
+    let cancelled = false;
 
     if (!client?.isAvailable()) {
       if (records.length <= 1500 || !searchDocuments?.length) {
@@ -611,7 +811,17 @@ export function useResultSetController<T>({
         });
         completedSearchKeyRef.current = asyncSearchKey;
         inFlightSearchKeyRef.current = '';
-        setAsyncSearchState({ key: asyncSearchKey, pending: false, result: fallback });
+        const fallbackIds = fallback.records.map((record, index) =>
+          extractHydrationRecordId(extractStableRecordId(record, index)),
+        );
+        setAsyncSearchState({
+          key: asyncSearchKey,
+          pending: false,
+          phase: 'unavailable',
+          result: fallback,
+          resultIds: fallbackIds,
+          error: 'Search worker unavailable; used bounded main-thread fallback.',
+        });
         return;
       }
       const warning = searchDocuments?.length
@@ -620,6 +830,7 @@ export function useResultSetController<T>({
       setAsyncSearchState({
         key: asyncSearchKey,
         pending: false,
+        phase: 'unavailable',
         result: createEmptySearchResult<T>(queryText, [warning]),
         error: warning,
       });
@@ -631,6 +842,7 @@ export function useResultSetController<T>({
     setAsyncSearchState((current) => ({
       key: asyncSearchKey,
       pending: true,
+      phase: readyCorpusKeyRef.current === corpusIdentityKey ? 'querying' : 'preparing-corpus',
       result: current?.key === asyncSearchKey ? current.result : null,
     }));
 
@@ -645,6 +857,47 @@ export function useResultSetController<T>({
             corpusResponse = null;
           }
         }
+        if (
+          (!corpusResponse || corpusResponse.type !== 'search:corpus-ready') &&
+          shouldStreamSearchDocumentCorpus &&
+          loadSearchDocumentChunks
+        ) {
+          let loadedRows = 0;
+          client.beginCorpus({
+            scopeKey,
+            requestId,
+            expectedCount: searchDocumentTotalCount,
+          });
+          const chunkResult = await loadSearchDocumentChunks({
+            chunkSize: SEARCH_DOCUMENT_CORPUS_CHUNK_SIZE,
+            isCancelled: () => cancelled || latestSearchRequestIdRef.current !== requestId,
+            onChunk: (documents, progress) => {
+              if (cancelled || latestSearchRequestIdRef.current !== requestId) return;
+              const records = createWorkerSearchRowsFromDocuments(documents, loadedRows);
+              loadedRows += records.length;
+              client.appendCorpus({ scopeKey, requestId, records });
+              recordPerfMetric({
+                kind: 'search',
+                name: 'chunked-corpus-transfer',
+                value: progress.loaded,
+                tags: {
+                  totalCount: progress.totalCount,
+                  chunkRows: records.length,
+                  scopeKey,
+                },
+              });
+            },
+          });
+          if (
+            chunkResult.cancelled ||
+            cancelled ||
+            latestSearchRequestIdRef.current !== requestId
+          ) {
+            incrementPerfCounter('search:chunked-corpus-cancelled');
+            return;
+          }
+          corpusResponse = await client.commitCorpus(scopeKey, requestId);
+        }
         if (!corpusResponse || corpusResponse.type !== 'search:corpus-ready') {
           corpusResponse = await client.setCorpus(scopeKey, workerCorpusRowsRef.current);
         }
@@ -654,6 +907,11 @@ export function useResultSetController<T>({
         }
         if (corpusResponse.type === 'search:corpus-ready') {
           readyCorpusKeyRef.current = corpusIdentityKey;
+          setAsyncSearchState((current) =>
+            current?.key === asyncSearchKey
+              ? { ...current, pending: true, phase: 'querying' }
+              : current,
+          );
           recordPerfMetric({
             kind: 'search',
             name: 'corpus-ready',
@@ -696,10 +954,12 @@ export function useResultSetController<T>({
         setAsyncSearchState({
           key: asyncSearchKey,
           pending: false,
+          phase: 'ready',
           result: {
             ...response.result,
             records: resultRecords,
           },
+          resultIds: response.ids,
         });
         completedSearchKeyRef.current = asyncSearchKey;
         if (inFlightSearchKeyRef.current === asyncSearchKey) {
@@ -744,10 +1004,12 @@ export function useResultSetController<T>({
               setAsyncSearchState({
                 key: asyncSearchKey,
                 pending: false,
+                phase: 'ready',
                 result: {
                   ...response.result,
                   records: nextResultRecords,
                 },
+                resultIds: response.ids,
               });
               recordPerfMetric({
                 kind: 'viewer',
@@ -783,6 +1045,7 @@ export function useResultSetController<T>({
         setAsyncSearchState({
           key: asyncSearchKey,
           pending: false,
+          phase: /cancelled/i.test(message) ? 'cancelled' : 'failed',
           result: createEmptySearchResult<T>(queryText, [message]),
           error: message,
         });
@@ -798,10 +1061,39 @@ export function useResultSetController<T>({
       });
 
     return () => {
-      if (inFlightSearchKeyRef.current === asyncSearchKey) {
+      cancelled = true;
+      const wasInFlight = inFlightSearchKeyRef.current === asyncSearchKey;
+      if (wasInFlight) {
         inFlightSearchKeyRef.current = '';
       }
       client.cancel(requestId);
+      if (wasInFlight) {
+        recordPerfMetric({
+          kind: 'search',
+          name: 'readiness-state',
+          value: 1,
+          tags: {
+            phase: 'cancelled',
+            queryLength: normalizedSearchQuery.length,
+            corpusRows: workerCorpusRowsRef.current.length,
+            searchDocuments: searchDocuments?.length ?? 0,
+            searchDocumentsLoaded,
+            searchDocumentsLoading,
+            cancellable: false,
+          },
+        });
+      }
+      setAsyncSearchState((current) =>
+        current?.key === asyncSearchKey && current.pending
+          ? {
+              ...current,
+              pending: false,
+              phase: 'cancelled',
+              result: current.result ?? createEmptySearchResult<T>(normalizedSearchQuery),
+              error: 'Search request cancelled.',
+            }
+          : current,
+      );
     };
   }, [
     asyncSearchKey,
@@ -810,10 +1102,24 @@ export function useResultSetController<T>({
     normalizedSearchQuery,
     corpusIdentityKey,
     scopeKey,
+    loadSearchDocumentChunks,
+    searchDocumentTotalCount,
     searchDocuments?.length,
+    searchDocumentsLoaded,
+    searchDocumentsLoading,
+    searchDocumentsBlockedReason,
+    shouldStreamSearchDocumentCorpus,
   ]);
 
   const searchResult = useMemo(() => {
+    if (!hasSearchQuery && folderScopeUsesSource) {
+      return createSearchResultFromRecords({
+        query: '',
+        records: records ?? [],
+        totalMatches: records?.length ?? 0,
+      });
+    }
+
     if (!hasSearchQuery && hasFolderScope && searchDocuments?.length) {
       const attemptedIds =
         folderHydrationAttemptState.key === folderHydrationKey
@@ -847,6 +1153,7 @@ export function useResultSetController<T>({
     folderScopedDocuments.length,
     folderHydrationAttemptState,
     folderHydrationKey,
+    folderScopeUsesSource,
     hasFolderScope,
     hasSearchQuery,
     needsWorkerSearch,
@@ -862,6 +1169,137 @@ export function useResultSetController<T>({
     asyncSearchState?.key === asyncSearchKey &&
     asyncSearchState.pending
   );
+  const searchResultIds =
+    hasSearchQuery && asyncSearchState?.key === asyncSearchKey
+      ? (asyncSearchState.resultIds ?? [])
+      : [];
+  const streamSearchResultRows = useMemo(() => {
+    if (
+      !hasSearchQuery ||
+      sorting.length ||
+      !hydrateRecordsByIds ||
+      !resultEntityType ||
+      !searchResultIds.length
+    ) {
+      return undefined;
+    }
+    const source = createSearchResultSourceAdapter<T>({
+      extensionName:
+        resultSourceDescriptor &&
+        'extensionName' in resultSourceDescriptor &&
+        typeof resultSourceDescriptor.extensionName === 'string' &&
+        resultSourceDescriptor.extensionName
+          ? resultSourceDescriptor.extensionName
+          : title,
+      entityType: resultEntityType,
+      query: normalizedSearchQuery,
+      ids: searchResultIds,
+      totalCount: searchResultIds.length,
+      folderIds: selectedFolders,
+      hydrateByIds: hydrateRecordsByIds,
+    });
+    return () => source.streamRows();
+  }, [
+    hasSearchQuery,
+    hydrateRecordsByIds,
+    normalizedSearchQuery,
+    resultEntityType,
+    resultSourceDescriptor,
+    searchResultIds,
+    selectedFolders,
+    sorting.length,
+    title,
+  ]);
+  const currentAsyncSearchState =
+    asyncSearchState?.key === asyncSearchKey ? asyncSearchState : null;
+  const searchReadinessState: SearchReadinessState = useMemo(() => {
+    if (!hasSearchQuery) {
+      return {
+        phase: 'idle',
+        label: searchReadinessLabel('idle'),
+        cancellable: false,
+      };
+    }
+
+    if (currentAsyncSearchState?.phase) {
+      return {
+        phase: currentAsyncSearchState.phase,
+        label: searchReadinessLabel(currentAsyncSearchState.phase),
+        detail: currentAsyncSearchState.error,
+        cancellable:
+          currentAsyncSearchState.pending &&
+          (currentAsyncSearchState.phase === 'preparing-corpus' ||
+            currentAsyncSearchState.phase === 'querying'),
+      };
+    }
+
+    if (searchDocumentsBlockedReason) {
+      return {
+        phase: 'degraded',
+        label: searchReadinessLabel('degraded'),
+        detail: searchDocumentsBlockedReason,
+        cancellable: false,
+      };
+    }
+
+    if (loadSearchDocuments && !searchDocumentsLoaded && !searchDocuments?.length) {
+      return {
+        phase: 'preparing-corpus',
+        label: searchReadinessLabel('preparing-corpus'),
+        detail: searchDocumentsLoading ? 'loading search documents' : 'waiting for search corpus',
+        cancellable: true,
+      };
+    }
+
+    if (readyCorpusKeyRef.current === corpusIdentityKey) {
+      return {
+        phase: 'ready',
+        label: searchReadinessLabel('ready'),
+        cancellable: false,
+      };
+    }
+
+    return {
+      phase: 'preparing-corpus',
+      label: searchReadinessLabel('preparing-corpus'),
+      cancellable: true,
+    };
+  }, [
+    corpusIdentityKey,
+    currentAsyncSearchState,
+    hasSearchQuery,
+    loadSearchDocuments,
+    searchDocuments?.length,
+    searchDocumentsBlockedReason,
+    searchDocumentsLoaded,
+    searchDocumentsLoading,
+  ]);
+
+  useEffect(() => {
+    recordPerfMetric({
+      kind: 'search',
+      name: 'readiness-state',
+      value: hasSearchQuery ? 1 : 0,
+      tags: {
+        phase: searchReadinessState.phase,
+        queryLength: normalizedSearchQuery.length,
+        corpusRows: workerCorpusRows.length,
+        searchDocuments: searchDocuments?.length ?? 0,
+        searchDocumentsLoaded,
+        searchDocumentsLoading,
+        cancellable: searchReadinessState.cancellable,
+      },
+    });
+  }, [
+    hasSearchQuery,
+    normalizedSearchQuery.length,
+    searchDocuments?.length,
+    searchDocumentsLoaded,
+    searchDocumentsLoading,
+    searchReadinessState.cancellable,
+    searchReadinessState.phase,
+    workerCorpusRows.length,
+  ]);
 
   const sortableColumns = useMemo(() => {
     const leaves = flattenLeafColumns(columns);
@@ -921,6 +1359,11 @@ export function useResultSetController<T>({
     () => sortedRecords.map((record, index) => extractStableRecordId(record, index)),
     [sortedRecords],
   );
+  const descriptorBackedResultSet =
+    Boolean(resultSourceDescriptor) &&
+    !hasSearchQuery &&
+    !sorting.length &&
+    (!hasFolderScope || folderScopeUsesSource);
 
   const handleRowSelectionChange = (updater: Updater<RowSelectionState>) => {
     const next = functionalUpdate(updater, rowSelection);
@@ -936,26 +1379,41 @@ export function useResultSetController<T>({
 
   const selectedRecords = useMemo(() => {
     if (selectionMode === 'all') {
-      return sortedRecords;
+      return [];
     }
     return sortedRecords.filter((record, index) => {
       const id = extractStableRecordId(record, index);
       return !!rowSelection[id];
     });
   }, [rowSelection, selectionMode, sortedRecords]);
+  const selectedRecordIds = useMemo(() => {
+    if (selectionMode === 'all') {
+      return [];
+    }
+    return Object.entries(rowSelection)
+      .filter(([, selected]) => selected)
+      .map(([id]) => id);
+  }, [rowSelection, selectionMode]);
 
   const resultSetSnapshot: ResultSetSnapshot = useMemo(
     () =>
       createResultSetSnapshot({
         queryText: normalizedSearchQuery,
         sort: serializeSortingState(sorting),
-        ids: currentResultIds,
-        totalMatches: searchResult.totalMatches,
+        ids: descriptorBackedResultSet ? [] : currentResultIds,
+        idsTruncated: descriptorBackedResultSet ? currentResultIds.length > 0 : false,
+        sourceDescriptor: descriptorBackedResultSet ? resultSourceDescriptor : undefined,
+        totalMatches: descriptorBackedResultSet
+          ? (resultSourceTotalCount ?? searchResult.totalMatches)
+          : searchResult.totalMatches,
         warnings: searchResult.warnings,
       }),
     [
       currentResultIds,
+      descriptorBackedResultSet,
       normalizedSearchQuery,
+      resultSourceDescriptor,
+      resultSourceTotalCount,
       searchResult.totalMatches,
       searchResult.warnings,
       sorting,
@@ -1021,19 +1479,24 @@ export function useResultSetController<T>({
     selectedFolders,
     setSelectedFolders,
     rowSelection,
+    setRowSelection,
     sorting,
     setSorting,
     selectionMode,
+    setSelectionMode,
     isFullscreen,
     setIsFullscreen,
     activeViewId,
     setActiveViewId,
     searchResult,
     searchPending,
+    searchReadinessState,
     sortedRecords,
     currentResultIds,
     handleRowSelectionChange,
     selectedRecords,
+    selectedRecordIds,
+    streamSearchResultRows,
     resultSetSnapshot,
     resolvedViewStateKey,
   };
