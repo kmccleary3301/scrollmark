@@ -943,17 +943,25 @@ export function createMediaResultSource(args: {
   );
   const key = serializeResultSourceDescriptor(descriptor);
   let totalCountPromise: Promise<number> | null = null;
+  let cachedTotalCount: number | null = null;
 
   const totalCount = async () => {
+    if (cachedTotalCount !== null) {
+      return cachedTotalCount;
+    }
     if (!totalCountPromise) {
       totalCountPromise = db
         .extGetSearchDocumentMediaCount(args.extensionName, {
           entityType: 'tweet',
           folderIds,
         })
-        .then((count) => Number(count) || 0)
-        .finally(() => {
+        .then((count) => {
+          cachedTotalCount = Number(count) || 0;
+          return cachedTotalCount;
+        })
+        .catch((error) => {
           totalCountPromise = null;
+          throw error;
         });
     }
     return await totalCountPromise;
@@ -987,18 +995,17 @@ export function createMediaResultSource(args: {
     }
 
     const offset = Math.max(0, Math.floor(Number(normalizedRequest.startIndex) || 0));
-    const [count, page] = await Promise.all([
-      totalCount(),
-      db.extGetSearchDocumentMediaCursorPage(args.extensionName, {
-        entityType: 'tweet',
-        folderIds,
-        after: normalizedRequest.after,
-        before: normalizedRequest.before,
-        offset: normalizedRequest.after || normalizedRequest.before ? undefined : offset,
-        limit,
-        order: 'newest',
-      }),
-    ]);
+    const page = await db.extGetSearchDocumentMediaCursorPage(args.extensionName, {
+      entityType: 'tweet',
+      folderIds,
+      after: normalizedRequest.after,
+      before: normalizedRequest.before,
+      offset: normalizedRequest.after || normalizedRequest.before ? undefined : offset,
+      limit,
+      order: 'newest',
+    });
+    const count =
+      cachedTotalCount ?? Math.max(offset + page.documents.length + (page.hasAfter ? 1 : 0), 0);
     const ids = page.documents.map((document) => document.entity_id).filter(Boolean);
     const rows = ((await db.extGetTweetsByIds(ids)) ?? []) as Tweet[];
     const window: ResultWindow<Tweet, SearchDocumentResultCursor> = {
@@ -1024,6 +1031,13 @@ export function createMediaResultSource(args: {
       lastWindowStartIndex: normalizedRequest.startIndex,
       lastCacheHit: false,
     });
+    if (cachedTotalCount === null) {
+      globalThis.setTimeout(() => {
+        void totalCount().catch(() => {
+          // Count is diagnostics/UI metadata; a failed background count must not block media render.
+        });
+      }, 3000);
+    }
     return window;
   };
 

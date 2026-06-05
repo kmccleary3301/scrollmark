@@ -46,7 +46,6 @@
   "Recipient": "Recipient",
   "Conversation ID": "Conversation ID",
   "Conversation Type": "Conversation Type",
-
   "Data": "Data",
   "Export captured data as JSON/HTML/CSV file. This may take a while depending on the amount of data. The exported file does not include media files such as images and videos but only the URLs.": "Export captured data as JSON/HTML/CSV file. This may take a while depending on the amount of data. The exported file does not include media files such as images and videos but only the URLs.",
   "Data length:": "Data length:",
@@ -95,9 +94,21 @@
   "The file extension of media (jpg/png/mp4)": "The file extension of media (jpg/png/mp4)",
   "Failed to export media. Open DevTools for more details.": "Failed to export media. Open DevTools for more details.",
   "Failed to copy media URLs. Open DevTools for more details.": "Failed to copy media URLs. Open DevTools for more details.",
-
   "filter.photo": "Photo",
   "filter.video": "Video",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "Include retweets"
+  "filter.retweet": "Include retweets",
+  "loading remaining rows": "loading remaining rows",
+  "Bundle ZIP compression:": "Bundle ZIP compression:",
+  "Fastest / store": "Fastest / store",
+  "Balanced / fast": "Balanced / fast",
+  "Smaller / slower": "Smaller / slower",
+  "Cancel Export": "Cancel Export",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "Export a canonical portable ZIP bundle for sharing/importing.",
+  "Export Bundle ZIP": "Export Bundle ZIP",
+  "Source-backed media": "Source-backed media",
+  "rows scanned:": "rows scanned:",
+  "media URLs:": "media URLs:",
+  "loading": "loading",
+  "Loading media...": "Loading media..."
 }

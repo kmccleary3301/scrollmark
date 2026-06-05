@@ -46,7 +46,6 @@
   "Recipient": "接收者",
   "Conversation ID": "对话 ID",
   "Conversation Type": "对话类型",
-
   "Data": "数据",
   "Export captured data as JSON/HTML/CSV file. This may take a while depending on the amount of data. The exported file does not include media files such as images and videos but only the URLs.": "将捕获的数据导出为 JSON/HTML/CSV 文件。这可能需要一些时间，具体取决于数据量。导出的文件不包括图片和视频等媒体文件，只包括它们的 URL。",
   "Data length:": "数据长度:",
@@ -95,9 +94,21 @@
   "The file extension of media (jpg/png/mp4)": "媒体文件扩展名（jpg/png/mp4）",
   "Failed to export media. Open DevTools for more details.": "导出媒体失败。打开 DevTools 以获取更多详细信息。",
   "Failed to copy media URLs. Open DevTools for more details.": "复制媒体 URL 失败。打开 DevTools 以获取更多详细信息。",
-
   "filter.photo": "图片",
   "filter.video": "视频",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "包括转推"
+  "filter.retweet": "包括转推",
+  "loading remaining rows": "正在加载剩余行",
+  "Bundle ZIP compression:": "捆绑 ZIP 压缩：",
+  "Fastest / store": "最快 / 仅存储",
+  "Balanced / fast": "平衡 / 快速",
+  "Smaller / slower": "更小 / 更慢",
+  "Cancel Export": "取消导出",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "导出用于分享/导入的规范可移植 ZIP 捆绑包。",
+  "Export Bundle ZIP": "导出捆绑 ZIP",
+  "Source-backed media": "源支持媒体",
+  "rows scanned:": "已扫描行：",
+  "media URLs:": "媒体 URL：",
+  "loading": "加载中",
+  "Loading media...": "正在加载媒体..."
 }

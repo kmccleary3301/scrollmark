@@ -97,5 +97,18 @@
   "filter.photo": "Foto",
   "filter.video": "Video",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "Incluir retweets"
+  "filter.retweet": "Incluir retweets",
+  "loading remaining rows": "cargando filas restantes",
+  "Bundle ZIP compression:": "Compresión del ZIP bundle:",
+  "Fastest / store": "Más rápido / almacenar",
+  "Balanced / fast": "Equilibrado / rápido",
+  "Smaller / slower": "Más pequeño / más lento",
+  "Cancel Export": "Cancelar exportación",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "Exporta un ZIP bundle portátil canónico para compartir/importar.",
+  "Export Bundle ZIP": "Exportar ZIP bundle",
+  "Source-backed media": "Medios respaldados por fuente",
+  "rows scanned:": "filas escaneadas:",
+  "media URLs:": "URLs de medios:",
+  "loading": "cargando",
+  "Loading media...": "Cargando medios..."
 }

@@ -97,5 +97,18 @@
   "filter.photo": "تصویر",
   "filter.video": "ویڈیو",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "ری ٹویٹس شامل کریں"
+  "filter.retweet": "ری ٹویٹس شامل کریں",
+  "loading remaining rows": "باقی قطاریں لوڈ ہو رہی ہیں",
+  "Bundle ZIP compression:": "Bundle ZIP کمپریشن:",
+  "Fastest / store": "تیز ترین / store",
+  "Balanced / fast": "متوازن / تیز",
+  "Smaller / slower": "چھوٹا / سست",
+  "Cancel Export": "Export منسوخ کریں",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "share/import کے لیے canonical portable ZIP bundle export کریں۔",
+  "Export Bundle ZIP": "Bundle ZIP export کریں",
+  "Source-backed media": "Source-backed میڈیا",
+  "rows scanned:": "scan شدہ قطاریں:",
+  "media URLs:": "میڈیا URLs:",
+  "loading": "لوڈ ہو رہا ہے",
+  "Loading media...": "media لوڈ ہو رہا ہے..."
 }

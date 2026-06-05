@@ -2,7 +2,7 @@ import { Fragment } from 'preact';
 import { Signal } from '@preact/signals';
 import { useEffect, useState } from 'preact/hooks';
 import { options } from '@/core/options';
-import { useTranslation } from '@/i18n';
+import { TranslationKey, useTranslation } from '@/i18n';
 import { LogLine, logLinesSignal } from '@/utils/logger';
 import {
   clearDiagnosticBuffers,
@@ -22,6 +22,80 @@ type LogsProps = {
   lines: Signal<LogLine[]>;
 };
 
+type LogTemplateMatch = {
+  pattern: RegExp;
+  key: TranslationKey;
+  map: (match: RegExpMatchArray) => Record<string, unknown>;
+};
+
+const LOG_TEMPLATE_MATCHES: LogTemplateMatch[] = [
+  {
+    pattern: /^Database connected: (.+)$/,
+    key: 'Database connected: {{name}}',
+    map: (match) => ({ name: match[1] }),
+  },
+  {
+    pattern: /^App options migrated from v(.+) to v(.+)$/,
+    key: 'App options migrated from v{{oldVersion}} to v{{newVersion}}',
+    map: (match) => ({ oldVersion: match[1], newVersion: match[2] }),
+  },
+  {
+    pattern: /^Hooked into XMLHttpRequest \(installed=(true|false)\)$/,
+    key: 'Hooked into XMLHttpRequest (installed={{installed}})',
+    map: (match) => ({ installed: match[1] }),
+  },
+  {
+    pattern: /^Hook safe mode enabled \((.+)\)$/,
+    key: 'Hook safe mode enabled ({{reason}})',
+    map: (match) => ({ reason: match[1] }),
+  },
+  {
+    pattern: /^Hook repair failed \((\d+)\/(\d+)\)$/,
+    key: 'Hook repair failed ({{failures}}/{{limit}})',
+    map: (match) => ({ failures: match[1], limit: match[2] }),
+  },
+  {
+    pattern: /^Bookmark context tracking install failed; continuing without tracker \((.+)\)$/,
+    key: 'Bookmark context tracking install failed; continuing without tracker ({{details}})',
+    map: (match) => ({ details: match[1] }),
+  },
+  {
+    pattern: /^TWE_DIAG (.+)$/,
+    key: 'TWE_DIAG {{phase}}',
+    map: (match) => ({ phase: match[1] }),
+  },
+  {
+    pattern: /^([A-Za-z]+): (\d+) items received$/,
+    key: '{{module}}: {{count}} items received',
+    map: (match) => ({ module: match[1], count: match[2] }),
+  },
+  {
+    pattern: /^Exporting to ZIP file: (.+)$/,
+    key: 'Exporting to ZIP file: {{filename}}',
+    map: (match) => ({ filename: match[1] }),
+  },
+  {
+    pattern: /^Exporting to (.+) file: (.+)$/,
+    key: 'Exporting to {{format}} file: {{filename}}',
+    map: (match) => ({ format: match[1], filename: match[2] }),
+  },
+  {
+    pattern: /^Streaming export to (.+) file: (.+)$/,
+    key: 'Streaming export to {{format}} file: {{filename}}',
+    map: (match) => ({ format: match[1], filename: match[2] }),
+  },
+  {
+    pattern: /^Migration completed: (\d+) users and (\d+) tweets updated\.$/,
+    key: 'Migration completed: {{users}} users and {{tweets}} tweets updated.',
+    map: (match) => ({ users: match[1], tweets: match[2] }),
+  },
+  {
+    pattern: /^TweetTombstone received \(Reason: (.+)\)$/,
+    key: 'TweetTombstone received (Reason: {{reason}})',
+    map: (match) => ({ reason: match[1] }),
+  },
+];
+
 const RAW_DAEMON_BASE_URL_STORAGE_KEY = 'twe_raw_capture_daemon_url_v1';
 const RAW_SEARCH_QUERY_STORAGE_KEY = 'twe_raw_search_query_v1';
 const RAW_SEARCH_SORT_STORAGE_KEY = 'twe_raw_search_sort_v1';
@@ -30,13 +104,23 @@ const RAW_SEARCH_SAVED_STORAGE_KEY = 'twe_raw_search_saved_v1';
 const RAW_SEARCH_RANKING_STORAGE_KEY = 'twe_raw_search_ranking_v1';
 
 function Logs({ lines }: LogsProps) {
+  const { t } = useTranslation();
   const reversed = lines.value.slice().reverse();
+  const translateLogLine = (line: string) => {
+    for (const template of LOG_TEMPLATE_MATCHES) {
+      const match = line.match(template.pattern);
+      if (match) {
+        return t(template.key, template.map(match));
+      }
+    }
+    return t(line as TranslationKey);
+  };
 
   return (
     <pre class="leading-none text-xs max-h-48 bg-base-200 overflow-y-scroll m-0 px-1 py-2.5 no-scrollbar rounded-box-half">
       {reversed.map((line) => (
         <span class={colors[line.type]} key={line.index}>
-          #{line.index} {line.line}
+          #{line.index} {translateLogLine(line.line)}
           {'\n'}
         </span>
       ))}
@@ -66,7 +150,12 @@ type RawCaptureStatsView = {
 };
 
 function RawCaptureHealth() {
+  const { t } = useTranslation();
   const [stats, setStats] = useState<RawCaptureStatsView>(() => readRawStats());
+  const statusLabel = (value: string | boolean | undefined) => {
+    if (typeof value === 'boolean') return value ? t('online') : t('offline');
+    return t(String(value || 'unknown') as TranslationKey);
+  };
 
   useEffect(() => {
     const refresh = () => setStats(readRawStats());
@@ -98,30 +187,57 @@ function RawCaptureHealth() {
   return (
     <div class="text-[11px] leading-tight bg-base-200 rounded-box-half px-2 py-1.5 mb-1">
       <div>
-        raw events: {Number(stats.total || 0)} | dropped: {Number(stats.dropped || 0)}
+        {t('raw events: {{total}} | dropped: {{dropped}}', {
+          total: Number(stats.total || 0),
+          dropped: Number(stats.dropped || 0),
+        })}
       </div>
       <div>
-        spool: {Number(stats.spool_count || 0)} queued / {Number(stats.spool_enqueued || 0)} enq /{' '}
-        {Number(stats.spool_flushed || 0)} flushed / {Number(stats.spool_failed || 0)} failed
+        {t(
+          'spool: {{queued}} queued / {{enqueued}} enq / {{flushed}} flushed / {{failed}} failed',
+          {
+            queued: Number(stats.spool_count || 0),
+            enqueued: Number(stats.spool_enqueued || 0),
+            flushed: Number(stats.spool_flushed || 0),
+            failed: Number(stats.spool_failed || 0),
+          },
+        )}
       </div>
       <div>
-        spool overflow drops: {Number(stats.spool_drop_overflow || 0)} | unavailable:{' '}
-        {Number(stats.spool_unavailable || 0)} | oldest pending:{' '}
-        {Number(stats.oldest_pending_age_ms || 0)}ms
+        {t(
+          'spool overflow drops: {{drops}} | unavailable: {{unavailable}} | oldest pending: {{age}}ms',
+          {
+            drops: Number(stats.spool_drop_overflow || 0),
+            unavailable: Number(stats.spool_unavailable || 0),
+            age: Number(stats.oldest_pending_age_ms || 0),
+          },
+        )}
       </div>
       <div>
-        daemon: {stats.daemon_online ? 'online' : 'offline'}
-        {stats.daemon_last_error ? ` | last error: ${stats.daemon_last_error}` : ''}
+        {stats.daemon_last_error
+          ? t('daemon: {{status}} | last error: {{error}}', {
+              status: statusLabel(stats.daemon_online),
+              error: stats.daemon_last_error,
+            })
+          : t('daemon: {{status}}', { status: statusLabel(stats.daemon_online) })}
       </div>
       <div>
-        monitor: {stats.monitor_role || 'unknown'} | leader: {stats.monitor_leader_tab_id || '-'} |
-        lease: {Number(stats.monitor_last_heartbeat_ms || 0)}
+        {t('monitor: {{role}} | leader: {{leader}} | lease: {{lease}}', {
+          role: statusLabel(stats.monitor_role),
+          leader: stats.monitor_leader_tab_id || '-',
+          lease: Number(stats.monitor_last_heartbeat_ms || 0),
+        })}
       </div>
       <div>
-        monitor ticks route/viewport: {Number(stats.monitor_ticks_route || 0)}/
-        {Number(stats.monitor_ticks_viewport || 0)} | suppressed route/viewport:{' '}
-        {Number(stats.monitor_suppressed_route || 0)}/
-        {Number(stats.monitor_suppressed_viewport || 0)}
+        {t(
+          'monitor ticks route/viewport: {{route}}/{{viewport}} | suppressed route/viewport: {{suppressedRoute}}/{{suppressedViewport}}',
+          {
+            route: Number(stats.monitor_ticks_route || 0),
+            viewport: Number(stats.monitor_ticks_viewport || 0),
+            suppressedRoute: Number(stats.monitor_suppressed_route || 0),
+            suppressedViewport: Number(stats.monitor_suppressed_viewport || 0),
+          },
+        )}
       </div>
     </div>
   );

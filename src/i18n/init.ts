@@ -58,6 +58,10 @@ export function initI18n(): i18n {
     defaultNS: 'common',
     fallbackLng: 'en',
     nsSeparator: '::',
+    interpolation: {
+      // Preact escapes rendered text and attributes; escaping here leaks entities into plain text.
+      escapeValue: false,
+    },
     // Keep console quiet by default; opt-in via localStorage key.
     debug: shouldEnableI18nDebug(),
     resources,

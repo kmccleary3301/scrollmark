@@ -97,5 +97,18 @@
   "filter.photo": "ছবি",
   "filter.video": "ভিডিও",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "রিটুইট অন্তর্ভুক্ত করুন"
+  "filter.retweet": "রিটুইট অন্তর্ভুক্ত করুন",
+  "loading remaining rows": "বাকি সারি লোড হচ্ছে",
+  "Bundle ZIP compression:": "Bundle ZIP কমপ্রেশন:",
+  "Fastest / store": "সবচেয়ে দ্রুত / store",
+  "Balanced / fast": "সামঞ্জস্যপূর্ণ / দ্রুত",
+  "Smaller / slower": "ছোট / ধীর",
+  "Cancel Export": "রপ্তানি বাতিল",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "শেয়ার/ইমপোর্টের জন্য canonical portable ZIP bundle রপ্তানি করুন।",
+  "Export Bundle ZIP": "Bundle ZIP রপ্তানি",
+  "Source-backed media": "Source-backed মিডিয়া",
+  "rows scanned:": "স্ক্যান করা সারি:",
+  "media URLs:": "মিডিয়া URL:",
+  "loading": "লোড হচ্ছে",
+  "Loading media...": "মিডিয়া লোড হচ্ছে..."
 }

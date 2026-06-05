@@ -21,7 +21,7 @@ import {
   ImportedEntitySnapshot,
 } from '@/core/bundles';
 import { useTranslation, detectBrowserLanguage, LANGUAGES_CONFIG, TranslationKey } from '@/i18n';
-import { capitalizeFirstLetter, cx, useToggle } from '@/utils/common';
+import { cx, useToggle } from '@/utils/common';
 import { saveFile } from '@/utils/exporter';
 import { zipBlobFiles } from '@/utils/download';
 import {
@@ -423,7 +423,7 @@ export function Settings() {
             >
               {THEMES.map((theme) => (
                 <option key={theme} value={theme} selected={currentTheme.value === theme}>
-                  {capitalizeFirstLetter(theme)}
+                  {t(`theme.${theme}` as TranslationKey)}
                 </option>
               ))}
             </select>
@@ -462,10 +462,12 @@ export function Settings() {
           </label>
           <label class={styles.item}>
             <div class="flex items-center">
-              <span class="label-text whitespace-nowrap">Safe mode</span>
+              <span class="label-text whitespace-nowrap">{t('Safe mode')}</span>
               <a
                 class="tooltip tooltip-bottom ml-0.5 before:max-w-40"
-                data-tip="Disables hook-based capture when enabled. Turn this off for normal browsing and diagnostic capture."
+                data-tip={t(
+                  'Disables hook-based capture when enabled. Turn this off for normal browsing and diagnostic capture.',
+                )}
               >
                 <IconHelp size={20} />
               </a>
@@ -482,10 +484,10 @@ export function Settings() {
           </label>
           <label class={styles.item}>
             <div class="flex items-center">
-              <span class="label-text whitespace-nowrap">Hook mode</span>
+              <span class="label-text whitespace-nowrap">{t('Hook mode')}</span>
               <a
                 class="tooltip tooltip-bottom ml-0.5 before:max-w-40"
-                data-tip="Controls whether the userscript hooks XHR, fetch, both, or neither."
+                data-tip={t('Controls whether the userscript hooks XHR, fetch, both, or neither.')}
               >
                 <IconHelp size={20} />
               </a>
@@ -500,18 +502,18 @@ export function Settings() {
                 );
               }}
             >
-              <option value="both">both</option>
-              <option value="xhr">xhr</option>
-              <option value="fetch">fetch</option>
-              <option value="off">off</option>
+              <option value="both">{t('both')}</option>
+              <option value="xhr">{t('xhr')}</option>
+              <option value="fetch">{t('fetch')}</option>
+              <option value="off">{t('off')}</option>
             </select>
           </label>
           <label class={styles.item}>
             <div class="flex items-center">
-              <span class="label-text whitespace-nowrap">Repair mode</span>
+              <span class="label-text whitespace-nowrap">{t('Repair mode')}</span>
               <a
                 class="tooltip tooltip-bottom ml-0.5 before:max-w-40"
-                data-tip="Controls whether hook repair watchdog behavior is active."
+                data-tip={t('Controls whether hook repair watchdog behavior is active.')}
               >
                 <IconHelp size={20} />
               </a>
@@ -526,8 +528,8 @@ export function Settings() {
                 );
               }}
             >
-              <option value="watchdog">watchdog</option>
-              <option value="off">off</option>
+              <option value="watchdog">{t('watchdog')}</option>
+              <option value="off">{t('off')}</option>
             </select>
           </label>
           <label class={styles.item}>

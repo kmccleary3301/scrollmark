@@ -9,7 +9,7 @@ import {
   useSearchDocuments,
 } from '@/core/database/hooks';
 import { Extension, ExtensionType } from '@/core/extensions';
-import { useTranslation } from '@/i18n';
+import { TranslationKey, useTranslation } from '@/i18n';
 import { Tweet, User } from '@/types';
 import { useToggle } from '@/utils/common';
 import { downloadJson } from '@/modules/runtime-logs/diagnostics-bundle';
@@ -289,12 +289,18 @@ function SourceBackedTableView({
       <div class="flex items-center gap-2">
         {context.loading ? (
           <span class="font-mono text-[10px] opacity-60">
-            loading {context.loadedCount}/{context.totalCount}
+            {t('loading {{loaded}}/{{total}}', {
+              loaded: context.loadedCount,
+              total: context.totalCount,
+            })}
           </span>
         ) : null}
         {context.loadingMore ? (
           <span class="font-mono text-[10px] opacity-60">
-            loading more {context.loadedCount}/{context.totalCount}
+            {t('loading more {{loaded}}/{{total}}', {
+              loaded: context.loadedCount,
+              total: context.totalCount,
+            })}
           </span>
         ) : null}
         {isBookmarksModule && (
@@ -313,7 +319,7 @@ function SourceBackedTableView({
                 `twe-bookmarks-search-history-${Date.now()}.json`,
               );
             }}
-            title="Export persisted bookmark search history"
+            title={t('Export persisted bookmark search history')}
           >
             {t('Export Search History')}
           </button>
@@ -321,12 +327,19 @@ function SourceBackedTableView({
         {isBookmarksModule && (
           <span
             class="badge badge-outline badge-sm font-mono tooltip before:whitespace-pre-line before:max-w-40"
-            data-tip={`latest: ${bookmarkStatus.latestStatus}
-api-name: ${bookmarkStatus.counts['api-name']}
-id-only: ${bookmarkStatus.counts['id-only']}
-none: ${bookmarkStatus.counts.none}`}
+            data-tip={t(
+              'latest: {{latest}}\napi-name: {{apiName}}\nid-only: {{idOnly}}\nnone: {{none}}',
+              {
+                latest: t(bookmarkStatus.latestStatus as TranslationKey),
+                apiName: bookmarkStatus.counts['api-name'],
+                idOnly: bookmarkStatus.counts['id-only'],
+                none: bookmarkStatus.counts.none,
+              },
+            )}
           >
-            folder metadata: {bookmarkStatus.latestStatus}
+            {t('folder metadata: {{status}}', {
+              status: t(bookmarkStatus.latestStatus as TranslationKey),
+            })}
           </span>
         )}
         <button
@@ -335,9 +348,11 @@ none: ${bookmarkStatus.counts.none}`}
           disabled={context.loading || mediaExportBlocked}
           title={
             context.loading
-              ? 'Wait for records to finish loading before exporting.'
+              ? t('Wait for records to finish loading before exporting.')
               : mediaExportBlocked
-                ? 'Media export is disabled for large result sets until media export has a source-backed stream.'
+                ? t(
+                    'Media export is disabled for large result sets until media export has a source-backed stream.',
+                  )
                 : undefined
           }
         >
@@ -368,7 +383,11 @@ none: ${bookmarkStatus.counts.none}`}
         onSourceWindowChange={activeCapturedState.requestWindow}
         streamSourceRows={() => activeCapturedState.streamRows() as AsyncIterable<Tweet>}
         streamMediaRows={() => mediaState?.streamRows() ?? emptyTweetStream()}
+        mediaSourceKey={mediaState?.sourceKey}
         mediaSourceTotalCount={mediaState?.totalCount ?? undefined}
+        getMediaWindow={
+          mediaState ? (startIndex, limit) => mediaState.getWindow(startIndex, limit) : undefined
+        }
         onBookmarkFolderSelectionChange={setSourceBackedFolderIds}
         hydrateRecordsByIds={(ids) => db.extGetTweetsByIds(ids) as Promise<Tweet[]>}
         records={(records as Tweet[]) ?? []}

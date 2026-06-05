@@ -387,19 +387,19 @@ export function ExportMediaModal<T>({
         </div>
         {sourceResultAvailable && exportScope === 'result_set' ? (
           <div class="rounded-box-half border border-base-300 bg-base-200/60 px-3 py-2 text-xs leading-5 mb-2">
-            <div class="font-semibold">Source-backed media</div>
+            <div class="font-semibold">{t('Source-backed media')}</div>
             <div>
-              rows scanned:{' '}
+              {t('rows scanned:')}{' '}
               <span class="font-mono">
                 {sourceResultRowsScanned}
                 {resultMediaSourceCount ? `/${resultMediaSourceCount}` : ''}
               </span>
             </div>
             <div>
-              media URLs:{' '}
+              {t('media URLs:')}{' '}
               <span class="font-mono">
                 {mediaList.length}
-                {sourceResultMediaLoading ? ' loading' : ''}
+                {sourceResultMediaLoading ? ` ${t('loading')}` : ''}
               </span>
             </div>
           </div>
@@ -592,7 +592,7 @@ export function ExportMediaModal<T>({
           {mediaList.length > 0 ? null : (
             <div class="flex items-center justify-center h-28 w-full">
               <p class="text-base-content text-opacity-50">
-                {sourceResultMediaLoading ? 'Loading media...' : t('No media selected.')}
+                {sourceResultMediaLoading ? t('Loading media...') : t('No media selected.')}
               </p>
             </div>
           )}

@@ -3,6 +3,7 @@ import { IconBrandTwitterFilled, IconX } from '@tabler/icons-preact';
 
 import { ErrorBoundary } from '@/components/error-boundary';
 import { cx } from '@/utils/common';
+import packageJson from '@/../package.json';
 
 import { Settings } from './settings';
 
@@ -41,7 +42,12 @@ export function ControlPanelShell({
       <header class="mx-4 mb-1 flex h-9 items-center">
         <IconBrandTwitterFilled class="mr-2 shrink-0 text-base-content" />
         <div class="flex-grow leading-none">
-          <h2 class="font-semibold leading-none text-xl m-0">{title}</h2>
+          <h2 class="m-0 flex items-baseline gap-2 text-xl font-semibold leading-none">
+            <span>{title}</span>
+            <span class="font-mono text-[10px] font-normal text-base-content opacity-70">
+              v{packageJson.version}
+            </span>
+          </h2>
           {byline ? <p class="font-mono text-[10px] opacity-70 m-0 mt-1">{byline}</p> : null}
         </div>
         <ErrorBoundary>

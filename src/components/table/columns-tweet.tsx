@@ -95,6 +95,9 @@ const bookmarkFolderIdAccessor = (row: Tweet) => getDerivedTweetTableData(row).b
 export const columns = [
   columnHelper.display({
     id: 'select',
+    size: 48,
+    minSize: 48,
+    maxSize: 48,
     meta: { exportable: false },
     header: ({ table }) => (
       <input
@@ -131,12 +134,16 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('rest_id', {
+    size: 112,
+    minSize: 112,
     meta: { exportKey: 'id', exportHeader: 'ID' },
     header: () => <Trans i18nKey="ID" />,
     cell: (info) => <p class="w-20 break-all font-mono text-xs">{info.getValue()}</p>,
   }),
   columnHelper.accessor((row) => getDerivedTweetTableData(row).createdAtMs, {
     id: 'created_at',
+    size: 136,
+    minSize: 128,
     meta: {
       exportKey: 'created_at',
       exportHeader: 'Date',
@@ -156,6 +163,9 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('legacy.full_text', {
+    size: 360,
+    minSize: 280,
+    maxSize: 520,
     meta: {
       exportKey: 'full_text',
       exportHeader: 'Content',
@@ -190,6 +200,8 @@ export const columns = [
   }),
   columnHelper.accessor((row) => getDerivedTweetTableData(row).media.length, {
     id: 'media',
+    size: 176,
+    minSize: 136,
     meta: {
       exportKey: 'media',
       exportHeader: 'Media',
@@ -211,6 +223,8 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('core.user_results.result.core.screen_name', {
+    size: 144,
+    minSize: 120,
     meta: { exportKey: 'screen_name', exportHeader: 'Screen Name' },
     header: () => <Trans i18nKey="Screen Name" />,
     cell: (info) => (
@@ -226,11 +240,15 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('core.user_results.result.core.name', {
+    size: 184,
+    minSize: 144,
     meta: { exportKey: 'name', exportHeader: 'Profile Name' },
     header: () => <Trans i18nKey="Profile Name" />,
     cell: (info) => <p class="w-32">{info.getValue()}</p>,
   }),
   columnHelper.accessor('core.user_results.result.avatar.image_url', {
+    size: 96,
+    minSize: 84,
     meta: { exportKey: 'profile_image_url', exportHeader: 'Profile Image' },
     header: () => <Trans i18nKey="Profile Image" />,
     cell: (info) => (
@@ -245,11 +263,15 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('core.user_results.result.rest_id', {
+    size: 112,
+    minSize: 112,
     meta: { exportKey: 'user_id', exportHeader: 'User ID' },
     header: () => <Trans i18nKey="User ID" />,
     cell: (info) => <p class="w-20 break-all font-mono text-xs">{info.getValue()}</p>,
   }),
   columnHelper.accessor('legacy.in_reply_to_screen_name', {
+    size: 144,
+    minSize: 120,
     meta: {
       exportKey: 'in_reply_to',
       exportHeader: 'Replying To',
@@ -270,6 +292,8 @@ export const columns = [
   }),
   columnHelper.accessor(rtSourceAccessor, {
     id: 'rt_source',
+    size: 144,
+    minSize: 120,
     meta: {
       exportKey: 'retweeted_status',
       exportHeader: 'RT Source',
@@ -293,6 +317,8 @@ export const columns = [
   }),
   columnHelper.accessor(quoteSourceAccessor, {
     id: 'quote_source',
+    size: 144,
+    minSize: 120,
     meta: {
       exportKey: 'quoted_status',
       exportHeader: 'Quote Source',
@@ -316,6 +342,8 @@ export const columns = [
   }),
   columnHelper.display({
     id: 'media_tags',
+    size: 184,
+    minSize: 144,
     meta: {
       exportKey: 'media_tags',
       exportHeader: 'Media Tags',
@@ -335,31 +363,43 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('legacy.favorite_count', {
+    size: 96,
+    minSize: 88,
     meta: { exportKey: 'favorite_count', exportHeader: 'Favorites' },
     header: () => <Trans i18nKey="Favorites" />,
     cell: (info) => <p>{info.getValue()}</p>,
   }),
   columnHelper.accessor('legacy.retweet_count', {
+    size: 96,
+    minSize: 88,
     meta: { exportKey: 'retweet_count', exportHeader: 'Retweets' },
     header: () => <Trans i18nKey="Retweets" />,
     cell: (info) => <p>{info.getValue()}</p>,
   }),
   columnHelper.accessor('legacy.bookmark_count', {
+    size: 104,
+    minSize: 96,
     meta: { exportKey: 'bookmark_count', exportHeader: 'Bookmarks' },
     header: () => <Trans i18nKey="Bookmarks" />,
     cell: (info) => <p>{info.getValue()}</p>,
   }),
   columnHelper.accessor('legacy.quote_count', {
+    size: 88,
+    minSize: 80,
     meta: { exportKey: 'quote_count', exportHeader: 'Quotes' },
     header: () => <Trans i18nKey="Quotes" />,
     cell: (info) => <p>{info.getValue()}</p>,
   }),
   columnHelper.accessor('legacy.reply_count', {
+    size: 88,
+    minSize: 80,
     meta: { exportKey: 'reply_count', exportHeader: 'Replies' },
     header: () => <Trans i18nKey="Replies" />,
     cell: (info) => <p>{info.getValue()}</p>,
   }),
   columnHelper.accessor('views.count', {
+    size: 88,
+    minSize: 80,
     meta: {
       exportKey: 'views_count',
       exportHeader: 'Views',
@@ -370,22 +410,30 @@ export const columns = [
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('legacy.favorited', {
+    size: 104,
+    minSize: 96,
     meta: { exportKey: 'favorited', exportHeader: 'Favorited' },
     header: () => <Trans i18nKey="Favorited" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor('legacy.retweeted', {
+    size: 104,
+    minSize: 96,
     meta: { exportKey: 'retweeted', exportHeader: 'Retweeted' },
     header: () => <Trans i18nKey="Retweeted" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor('legacy.bookmarked', {
+    size: 112,
+    minSize: 104,
     meta: { exportKey: 'bookmarked', exportHeader: 'Bookmarked' },
     header: () => <Trans i18nKey="Bookmarked" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor(bookmarkFolderNameAccessor, {
     id: 'bookmark_folder_name',
+    size: 184,
+    minSize: 152,
     meta: {
       exportKey: 'bookmark_folder_name',
       exportHeader: 'Bookmark Folder',
@@ -405,6 +453,8 @@ export const columns = [
   }),
   columnHelper.accessor(bookmarkFolderIdAccessor, {
     id: 'bookmark_folder_id',
+    size: 168,
+    minSize: 144,
     meta: {
       exportKey: 'bookmark_folder_id',
       exportHeader: 'Bookmark Folder ID',
@@ -422,6 +472,9 @@ export const columns = [
   }),
   columnHelper.display({
     id: 'url',
+    size: 64,
+    minSize: 56,
+    maxSize: 72,
     meta: {
       exportKey: 'url',
       exportHeader: 'URL',
@@ -436,6 +489,8 @@ export const columns = [
   }),
   columnHelper.display({
     id: 'actions',
+    size: 112,
+    minSize: 104,
     meta: { exportable: false },
     header: () => <Trans i18nKey="Actions" />,
     cell: (info) => (

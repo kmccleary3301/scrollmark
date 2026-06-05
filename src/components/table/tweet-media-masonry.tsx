@@ -15,6 +15,7 @@ import {
 } from '@/utils/api';
 import { formatDateTime, formatVideoDuration } from '@/utils/common';
 import { options } from '@/core/options';
+import type { ResultWindow, SearchDocumentResultCursor } from '@/core/database/result-source';
 import {
   IconBookmark,
   IconExternalLink,
@@ -36,7 +37,12 @@ type TweetMediaMasonryProps = {
   sourceMode?: boolean;
   sourceTotalCount?: number;
   streamSourceRows?: () => AsyncIterable<Tweet>;
+  mediaSourceKey?: string;
   mediaSourceTotalCount?: number;
+  getMediaWindow?: (
+    startIndex: number,
+    limit: number,
+  ) => Promise<ResultWindow<Tweet, SearchDocumentResultCursor>>;
   streamMediaRows?: () => AsyncIterable<Tweet>;
   onDiagnosticsChange?: (diagnostics: BaseTableAlternateViewDiagnostics | null) => void;
 };
@@ -74,8 +80,50 @@ const NARROW_COMFORTABLE_CARD_WIDTH = 228;
 const NARROW_COMPACT_CARD_WIDTH = 196;
 const COMFORTABLE_GAP = 16;
 const COMPACT_GAP = 14;
-const SOURCE_SCAN_BATCH_ROWS = 240;
-const SOURCE_INITIAL_MEDIA_TARGET = 72;
+const SOURCE_SCAN_BATCH_ROWS = 360;
+const SOURCE_INITIAL_WINDOW_BATCH_ROWS = 48;
+const SOURCE_WINDOW_BATCH_ROWS = 160;
+const SOURCE_INITIAL_MEDIA_TARGET = 42;
+const SOURCE_PREFETCH_MEDIA_AHEAD = 144;
+const MASONRY_SOURCE_CACHE_LIMIT = 8;
+
+type MasonrySourceCache = {
+  items: MasonryItem[];
+  nextRowIndex: number;
+  scannedRows: number;
+  exhausted: boolean;
+  totalCount: number;
+  updatedAt: number;
+};
+
+const masonrySourceCache = new Map<string, MasonrySourceCache>();
+
+function readMasonrySourceCache(cacheKey: string): MasonrySourceCache | null {
+  return masonrySourceCache.get(cacheKey) ?? null;
+}
+
+function writeMasonrySourceCache(cacheKey: string, cache: MasonrySourceCache) {
+  cache.updatedAt = Date.now();
+  masonrySourceCache.set(cacheKey, cache);
+  if (masonrySourceCache.size <= MASONRY_SOURCE_CACHE_LIMIT) return;
+  const oldest = [...masonrySourceCache.entries()].sort(
+    (left, right) => left[1].updatedAt - right[1].updatedAt,
+  )[0]?.[0];
+  if (oldest) {
+    masonrySourceCache.delete(oldest);
+  }
+}
+
+function createEmptyMasonrySourceCache(totalCount: number): MasonrySourceCache {
+  return {
+    items: [],
+    nextRowIndex: 0,
+    scannedRows: 0,
+    exhausted: false,
+    totalCount,
+    updatedAt: Date.now(),
+  };
+}
 
 function extractOriginalTweetMedia(tweet: Tweet): Media[] {
   if (extractRetweetedTweet(tweet)) {
@@ -205,7 +253,9 @@ export function TweetMediaMasonry({
   sourceMode,
   sourceTotalCount = 0,
   streamSourceRows,
+  mediaSourceKey,
   mediaSourceTotalCount,
+  getMediaWindow,
   streamMediaRows,
   onDiagnosticsChange,
 }: TweetMediaMasonryProps) {
@@ -217,6 +267,8 @@ export function TweetMediaMasonry({
   const loadingSourceRef = useRef(false);
   const exhaustedSourceRef = useRef(false);
   const scannedSourceRowsRef = useRef(0);
+  const sourceItemsRef = useRef<MasonryItem[]>([]);
+  const sourceCacheKeyRef = useRef('');
   const [visibleCount, setVisibleCount] = useState(INITIAL_BATCH);
   const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [containerWidth, setContainerWidth] = useState(0);
@@ -226,7 +278,14 @@ export function TweetMediaMasonry({
   const [sourceExhausted, setSourceExhausted] = useState(false);
   const activeStreamRows = streamMediaRows ?? streamSourceRows;
   const activeSourceTotalCount = mediaSourceTotalCount ?? sourceTotalCount;
-  const useSourceStream = Boolean(sourceMode && activeStreamRows);
+  const sourceCacheKey = useMemo(
+    () =>
+      [storageKey || 'media-masonry', mediaSourceKey || 'stream-source', sourceTotalCount].join(
+        ':',
+      ),
+    [mediaSourceKey, sourceTotalCount, storageKey],
+  );
+  const useSourceStream = Boolean(sourceMode && (getMediaWindow || activeStreamRows));
 
   useEffect(() => {
     try {
@@ -255,46 +314,91 @@ export function TweetMediaMasonry({
   );
   const items = useSourceStream ? sourceItems : arrayItems;
 
+  useEffect(() => {
+    sourceItemsRef.current = sourceItems;
+  }, [sourceItems]);
+
   const loadSourceUntil = async (targetMediaCount: number) => {
     if (
       !useSourceStream ||
-      !activeStreamRows ||
+      (!activeStreamRows && !getMediaWindow) ||
       loadingSourceRef.current ||
       exhaustedSourceRef.current
     ) {
+      return;
+    }
+    if (sourceItemsRef.current.length >= targetMediaCount) {
       return;
     }
     loadingSourceRef.current = true;
     setSourceLoading(true);
     const sourceGeneration = sourceGenerationRef.current;
     const beforeRows = scannedSourceRowsRef.current;
+    const cacheKey = sourceCacheKeyRef.current || sourceCacheKey;
+    const cache =
+      readMasonrySourceCache(cacheKey) ?? createEmptyMasonrySourceCache(activeSourceTotalCount);
     let scannedRows = 0;
     let appendedItems = 0;
     try {
-      const iterator = iteratorRef.current ?? activeStreamRows()[Symbol.asyncIterator]();
-      iteratorRef.current = iterator;
       const nextItems: MasonryItem[] = [];
-      while (
-        sourceItems.length + nextItems.length < targetMediaCount &&
-        scannedRows < SOURCE_SCAN_BATCH_ROWS
-      ) {
-        if (sourceGenerationRef.current !== sourceGeneration) return;
-        const next = await iterator.next();
-        if (sourceGenerationRef.current !== sourceGeneration) return;
-        if (next.done) {
-          exhaustedSourceRef.current = true;
-          setSourceExhausted(true);
-          break;
-        }
-        scannedRows += 1;
-        scannedSourceRowsRef.current += 1;
-        if (scannedRows % 12 === 0) {
+
+      if (getMediaWindow) {
+        while (
+          sourceItemsRef.current.length + nextItems.length < targetMediaCount &&
+          scannedRows < SOURCE_SCAN_BATCH_ROWS &&
+          !cache.exhausted
+        ) {
+          if (sourceGenerationRef.current !== sourceGeneration) return;
+          const windowLimit =
+            cache.nextRowIndex <= 0 ? SOURCE_INITIAL_WINDOW_BATCH_ROWS : SOURCE_WINDOW_BATCH_ROWS;
+          const window = await getMediaWindow(cache.nextRowIndex, windowLimit);
+          if (sourceGenerationRef.current !== sourceGeneration) return;
+          scannedRows += window.rows.length;
+          cache.nextRowIndex += window.rows.length;
+          scannedSourceRowsRef.current = Math.max(scannedSourceRowsRef.current, cache.nextRowIndex);
           setScannedSourceRows(scannedSourceRowsRef.current);
+          for (const row of window.rows) {
+            const tweetItems = buildMasonryItemsFromTweet(row);
+            if (tweetItems.length) {
+              nextItems.push(...tweetItems);
+              appendedItems += tweetItems.length;
+            }
+          }
+          cache.totalCount = window.totalCount || activeSourceTotalCount;
+          if (!window.hasAfter || !window.rows.length) {
+            cache.exhausted = true;
+            exhaustedSourceRef.current = true;
+            setSourceExhausted(true);
+            break;
+          }
         }
-        const tweetItems = buildMasonryItemsFromTweet(next.value);
-        if (tweetItems.length) {
-          nextItems.push(...tweetItems);
-          appendedItems += tweetItems.length;
+      } else if (activeStreamRows) {
+        const iterator = iteratorRef.current ?? activeStreamRows()[Symbol.asyncIterator]();
+        iteratorRef.current = iterator;
+        while (
+          sourceItemsRef.current.length + nextItems.length < targetMediaCount &&
+          scannedRows < SOURCE_SCAN_BATCH_ROWS
+        ) {
+          if (sourceGenerationRef.current !== sourceGeneration) return;
+          const next = await iterator.next();
+          if (sourceGenerationRef.current !== sourceGeneration) return;
+          if (next.done) {
+            cache.exhausted = true;
+            exhaustedSourceRef.current = true;
+            setSourceExhausted(true);
+            break;
+          }
+          scannedRows += 1;
+          cache.nextRowIndex += 1;
+          scannedSourceRowsRef.current += 1;
+          if (scannedRows % 12 === 0) {
+            setScannedSourceRows(scannedSourceRowsRef.current);
+          }
+          const tweetItems = buildMasonryItemsFromTweet(next.value);
+          if (tweetItems.length) {
+            nextItems.push(...tweetItems);
+            appendedItems += tweetItems.length;
+          }
         }
       }
       if (nextItems.length) {
@@ -306,8 +410,20 @@ export function TweetMediaMasonry({
             existing.add(item.id);
             return true;
           });
-          return deduped.length ? [...current, ...deduped] : current;
+          if (!deduped.length) return current;
+          const next = [...current, ...deduped];
+          cache.items = next;
+          cache.scannedRows = scannedSourceRowsRef.current;
+          cache.exhausted = exhaustedSourceRef.current;
+          writeMasonrySourceCache(cacheKey, cache);
+          sourceItemsRef.current = next;
+          return next;
         });
+      } else {
+        cache.items = sourceItemsRef.current;
+        cache.scannedRows = scannedSourceRowsRef.current;
+        cache.exhausted = exhaustedSourceRef.current;
+        writeMasonrySourceCache(cacheKey, cache);
       }
     } finally {
       if (sourceGenerationRef.current === sourceGeneration) {
@@ -323,10 +439,11 @@ export function TweetMediaMasonry({
           scannedRows,
           scannedRowsTotal: scannedSourceRowsRef.current,
           scannedRowsBefore: beforeRows,
-          mediaItems: sourceItems.length + appendedItems,
+          mediaItems: sourceItemsRef.current.length + appendedItems,
           targetMediaCount,
           exhausted: exhaustedSourceRef.current,
           sourceTotalCount: activeSourceTotalCount,
+          windowBacked: Boolean(getMediaWindow),
         },
       });
     }
@@ -336,18 +453,44 @@ export function TweetMediaMasonry({
     sourceGenerationRef.current += 1;
     iteratorRef.current = null;
     loadingSourceRef.current = false;
+    setSourceLoading(false);
+    sourceCacheKeyRef.current = sourceCacheKey;
+
+    if (!useSourceStream) {
+      exhaustedSourceRef.current = false;
+      scannedSourceRowsRef.current = 0;
+      sourceItemsRef.current = [];
+      setSourceItems([]);
+      setScannedSourceRows(0);
+      setSourceExhausted(false);
+      return;
+    }
+
+    const cached = readMasonrySourceCache(sourceCacheKey);
+    if (cached) {
+      exhaustedSourceRef.current = cached.exhausted;
+      scannedSourceRowsRef.current = cached.scannedRows;
+      sourceItemsRef.current = cached.items;
+      setSourceItems(cached.items);
+      setScannedSourceRows(cached.scannedRows);
+      setSourceExhausted(cached.exhausted);
+      return;
+    }
+
+    const empty = createEmptyMasonrySourceCache(activeSourceTotalCount);
+    writeMasonrySourceCache(sourceCacheKey, empty);
     exhaustedSourceRef.current = false;
     scannedSourceRowsRef.current = 0;
+    sourceItemsRef.current = [];
     setSourceItems([]);
     setScannedSourceRows(0);
-    setSourceLoading(false);
     setSourceExhausted(false);
-  }, [activeSourceTotalCount, storageKey, useSourceStream]);
+  }, [activeSourceTotalCount, sourceCacheKey, useSourceStream]);
 
   useEffect(() => {
     if (!useSourceStream) return;
     void loadSourceUntil(SOURCE_INITIAL_MEDIA_TARGET);
-  }, [activeSourceTotalCount, sourceItems.length, useSourceStream]);
+  }, [activeSourceTotalCount, sourceCacheKey, sourceItems.length, useSourceStream]);
 
   const firstItemId = items[0]?.id || '';
 
@@ -375,9 +518,14 @@ export function TweetMediaMasonry({
       const remaining =
         scrollParent.scrollHeight - (scrollParent.scrollTop + scrollParent.clientHeight);
       if (remaining <= SCROLL_THRESHOLD_PX) {
-        setVisibleCount((current) => Math.min(items.length, current + BATCH_SIZE));
-        if (useSourceStream && !sourceExhausted && items.length <= visibleCount + BATCH_SIZE) {
-          void loadSourceUntil(visibleCount + BATCH_SIZE + SOURCE_INITIAL_MEDIA_TARGET);
+        const nextVisibleCount = Math.min(items.length, visibleCount + BATCH_SIZE);
+        setVisibleCount(nextVisibleCount);
+        if (
+          useSourceStream &&
+          !sourceExhausted &&
+          items.length <= nextVisibleCount + SOURCE_PREFETCH_MEDIA_AHEAD
+        ) {
+          void loadSourceUntil(nextVisibleCount + SOURCE_PREFETCH_MEDIA_AHEAD);
         }
       }
     };
@@ -386,6 +534,13 @@ export function TweetMediaMasonry({
     scrollParent.addEventListener('scroll', maybeGrow, { passive: true });
     return () => scrollParent.removeEventListener('scroll', maybeGrow);
   }, [items.length, scrollParentRef, sourceExhausted, useSourceStream, visibleCount]);
+
+  useEffect(() => {
+    if (!useSourceStream || sourceExhausted) return;
+    if (items.length <= visibleCount + SOURCE_PREFETCH_MEDIA_AHEAD) {
+      void loadSourceUntil(visibleCount + SOURCE_PREFETCH_MEDIA_AHEAD);
+    }
+  }, [items.length, sourceExhausted, useSourceStream, visibleCount]);
 
   useLayoutEffect(() => {
     const node = rootRef.current;
@@ -438,29 +593,36 @@ export function TweetMediaMasonry({
   const sourceTotalLabel = activeSourceTotalCount || '?';
   const primaryStatus = useSourceStream
     ? sourceLoading
-      ? `loading source ${scannedSourceRows}/${sourceTotalLabel}`
-      : `source ${sourceStatus} ${scannedSourceRows}/${sourceTotalLabel}`
-    : `media ${items.length}`;
+      ? t('loading source {{scanned}}/{{total}}', {
+          scanned: scannedSourceRows,
+          total: sourceTotalLabel,
+        })
+      : t('source {{status}} {{scanned}}/{{total}}', {
+          status: t(sourceStatus),
+          scanned: scannedSourceRows,
+          total: sourceTotalLabel,
+        })
+    : t('media {{count}}', { count: items.length });
   const diagnosticsActions = useMemo(
     () => (
       <div class="join">
         <button
           class={`btn join-item btn-xs ${density === 'comfortable' ? 'btn-primary' : 'btn-ghost'}`}
           onClick={() => setDensity('comfortable')}
-          title="Comfortable density"
+          title={t('Comfortable density')}
         >
           <IconTable size={14} />
         </button>
         <button
           class={`btn join-item btn-xs ${density === 'compact' ? 'btn-primary' : 'btn-ghost'}`}
           onClick={() => setDensity('compact')}
-          title="Compact density"
+          title={t('Compact density')}
         >
           <IconLayoutColumns size={14} />
         </button>
       </div>
     ),
-    [density],
+    [density, t],
   );
   const diagnostics = useMemo<BaseTableAlternateViewDiagnostics>(
     () => ({
@@ -468,29 +630,41 @@ export function TweetMediaMasonry({
       details: [
         {
           key: 'rendered',
-          label: `rendered ${visibleItems.length}/${items.length} (window ${renderedStart}-${renderedEnd})`,
+          label: t('rendered {{rendered}}/{{total}} (window {{start}}-{{end}})', {
+            rendered: visibleItems.length,
+            total: items.length,
+            start: renderedStart,
+            end: renderedEnd,
+          }),
           minWidth: 'sm',
         },
         {
           key: 'loaded-media',
-          label: `loaded media ${items.length}`,
+          label: t('loaded media {{count}}', { count: items.length }),
           minWidth: 'md',
         },
         {
           key: 'source-rows',
           label: useSourceStream
-            ? `source rows ${scannedSourceRows}/${sourceTotalLabel} ${sourceStatus}`
-            : `source rows ${records.length}`,
+            ? t('source rows {{scanned}}/{{total}} {{status}}', {
+                scanned: scannedSourceRows,
+                total: sourceTotalLabel,
+                status: t(sourceStatus),
+              })
+            : t('source rows {{count}}', { count: records.length }),
           minWidth: 'lg',
         },
         {
           key: 'layout',
-          label: `layout ${columnCount} cols @ ${Math.round(columnWidth)}px`,
+          label: t('layout {{columns}} cols @ {{width}}px', {
+            columns: columnCount,
+            width: Math.round(columnWidth),
+          }),
           minWidth: 'xl',
         },
         {
           key: 'scope',
-          label: 'original tweet attachments only',
+          label: t('original tweet attachments only'),
           minWidth: 'xl',
         },
       ],
@@ -508,6 +682,7 @@ export function TweetMediaMasonry({
       scannedSourceRows,
       sourceStatus,
       sourceTotalLabel,
+      t,
       useSourceStream,
       visibleItems.length,
     ],
@@ -528,7 +703,7 @@ export function TweetMediaMasonry({
           {sourceLoading ? (
             <span class="inline-flex items-center gap-2">
               <span class="loading loading-spinner loading-sm" />
-              Loading media.
+              {t('Loading media.')}
             </span>
           ) : (
             t('No media available.')
@@ -572,7 +747,7 @@ export function TweetMediaMasonry({
                       ) : (
                         <IconPlayerPlayFilled size={14} />
                       )}
-                      <span>{item.media.type === 'photo' ? 'Photo' : 'Video'}</span>
+                      <span>{item.media.type === 'photo' ? t('Photo') : t('Video')}</span>
                     </div>
                     {item.durationLabel ? (
                       <div class="rounded-full bg-black/40 px-2 py-1 text-[10px] font-semibold">
@@ -593,7 +768,7 @@ export function TweetMediaMasonry({
                       href={item.tweetUrl}
                       target="_blank"
                       rel="noreferrer"
-                      title="Open tweet"
+                      title={t('Open tweet')}
                     >
                       <IconExternalLink size={14} />
                     </a>

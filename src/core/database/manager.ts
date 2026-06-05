@@ -2073,42 +2073,7 @@ export class DatabaseManager {
           .toArray()
           .catch(this.logError)) ?? [];
     }
-    let fallbackMode = usedFallback ? 'numeric_json' : 'media_flag';
-    const indexedCount =
-      (await this.searchDocuments()
-        .where('[extension_name+entity_type+media_flag+observed_at_ms+id]')
-        .between(minKey, maxKey, true, true)
-        .filter((row) => !folderIds.size || folderIds.has(String(row.folder_id || '').trim()))
-        .count()
-        .catch(this.logError)) ?? 0;
-    const scannedRows = await this.getSearchDocumentMediaScanRows(
-      extName,
-      entityType,
-      folderIds,
-      order,
-    );
-    const scannedCursorIndex = cursor
-      ? scannedRows.findIndex((row) => row.id === cursor.documentId)
-      : -1;
-    const scannedPageRows =
-      scannedCursorIndex >= 0 && args.before
-        ? scannedRows.slice(Math.max(0, scannedCursorIndex - limit - 1), scannedCursorIndex)
-        : scannedRows.slice(
-            scannedCursorIndex >= 0 ? scannedCursorIndex + 1 : offset,
-            (scannedCursorIndex >= 0 ? scannedCursorIndex + 1 : offset) + limit + 1,
-          );
-    if (
-      scannedRows.length > indexedCount ||
-      scannedPageRows.length > rows.length ||
-      (!rows.length && scannedRows.length)
-    ) {
-      usedFallback = true;
-      fallbackMode = 'legacy_flags_scan';
-      if (scannedRows.length > indexedCount) {
-        await this.repairSearchDocumentMediaIndexes(scannedRows);
-      }
-      rows = scannedPageRows;
-    }
+    const fallbackMode = usedFallback ? 'numeric_json' : 'media_flag';
     const documents = rows.slice(0, limit);
     const result: SearchDocumentCursorPage = {
       documents,

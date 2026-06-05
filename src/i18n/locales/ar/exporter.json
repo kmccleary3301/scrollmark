@@ -97,5 +97,18 @@
   "filter.photo": "صورة",
   "filter.video": "فيديو",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "تضمين إعادة التغريد"
+  "filter.retweet": "تضمين إعادة التغريد",
+  "loading remaining rows": "جارٍ تحميل الصفوف المتبقية",
+  "Bundle ZIP compression:": "ضغط حزمة ZIP:",
+  "Fastest / store": "الأسرع / تخزين",
+  "Balanced / fast": "متوازن / سريع",
+  "Smaller / slower": "أصغر / أبطأ",
+  "Cancel Export": "إلغاء التصدير",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "تصدير حزمة ZIP قياسية محمولة للمشاركة/الاستيراد.",
+  "Export Bundle ZIP": "تصدير حزمة ZIP",
+  "Source-backed media": "وسائط مدعومة من المصدر",
+  "rows scanned:": "الصفوف المفحوصة:",
+  "media URLs:": "عناوين URL للوسائط:",
+  "loading": "جارٍ التحميل",
+  "Loading media...": "جارٍ تحميل الوسائط..."
 }

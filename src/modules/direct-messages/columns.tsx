@@ -36,6 +36,9 @@ const columnHelper = createColumnHelper<Message>();
 export const columns = [
   columnHelper.display({
     id: 'select',
+    size: 48,
+    minSize: 48,
+    maxSize: 48,
     meta: { exportable: false },
     header: ({ table }) => (
       <input
@@ -58,11 +61,15 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('id', {
+    size: 112,
+    minSize: 112,
     meta: { exportKey: 'id', exportHeader: 'ID' },
     header: () => <Trans i18nKey="ID" />,
     cell: (info) => <p class="w-20 break-all font-mono text-xs">{info.getValue()}</p>,
   }),
   columnHelper.accessor('time', {
+    size: 136,
+    minSize: 128,
     meta: {
       exportKey: 'time',
       exportHeader: 'Date',
@@ -75,6 +82,9 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('message_data.text', {
+    size: 360,
+    minSize: 280,
+    maxSize: 520,
     meta: {
       exportKey: 'text',
       exportHeader: 'Content',
@@ -96,6 +106,8 @@ export const columns = [
   }),
   columnHelper.accessor((row) => extractMessageMedia(row), {
     id: 'media',
+    size: 176,
+    minSize: 136,
     meta: {
       exportKey: 'media',
       exportHeader: 'Media',
@@ -118,6 +130,8 @@ export const columns = [
   }),
   columnHelper.accessor((row) => getUserScreeNameFromId(row.message_data.sender_id), {
     id: 'sender',
+    size: 144,
+    minSize: 120,
     meta: { exportKey: 'sender', exportHeader: 'Sender' },
     header: () => <Trans i18nKey="Sender" />,
     cell: (info) => (
@@ -130,6 +144,8 @@ export const columns = [
   }),
   columnHelper.accessor((row) => getUserScreeNameFromId(row.message_data.recipient_id), {
     id: 'recipient',
+    size: 144,
+    minSize: 120,
     meta: { exportKey: 'recipient', exportHeader: 'Recipient' },
     header: () => <Trans i18nKey="Recipient" />,
     cell: (info) => (
@@ -145,18 +161,24 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('conversation_id', {
+    size: 144,
+    minSize: 128,
     meta: { exportKey: 'conversation_id', exportHeader: 'Conversation ID' },
     header: () => <Trans i18nKey="Conversation ID" />,
     cell: (info) => <p class="w-20 break-all font-mono text-xs">{info.getValue()}</p>,
   }),
   columnHelper.accessor((row) => getConversationTypeFromId(row.conversation_id), {
     id: 'conversation_type',
+    size: 160,
+    minSize: 136,
     meta: { exportKey: 'conversation_type', exportHeader: 'Conversation Type' },
     header: () => <Trans i18nKey="Conversation Type" />,
     cell: (info) => <p class="whitespace-pre">{info.getValue()}</p>,
   }),
   columnHelper.display({
     id: 'actions',
+    size: 112,
+    minSize: 104,
     meta: { exportable: false },
     header: () => <Trans i18nKey="Actions" />,
     cell: (info) => (

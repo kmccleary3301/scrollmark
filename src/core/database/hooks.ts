@@ -14,6 +14,7 @@ import {
   createLiveCapturesResultSource,
   createMediaResultSource,
 } from './result-sources';
+import type { ResultWindow, SearchDocumentResultCursor } from './result-source';
 
 const VIEWER_INITIAL_PAGE_SIZE = 80;
 const SOURCE_WINDOW_MIN_PAGE_SIZE = 48;
@@ -23,6 +24,7 @@ const SEARCH_DOCUMENT_FULL_LOAD_OVERRIDE_KEY = 'twe_allow_large_search_corpus_v1
 const SEARCH_DOCUMENT_COUNT_OVERRIDE_KEY = 'twe_search_document_full_load_count_override_v1';
 const SOURCE_WINDOW_REQUEST_DELAY_KEY = 'twe_source_window_request_delay_ms_v1';
 const MAX_DIAGNOSTIC_SOURCE_WINDOW_DELAY_MS = 5000;
+const MEDIA_COUNT_BACKGROUND_DELAY_MS = 12000;
 
 export type DbBackedCapturedRecordsState<T> = {
   sourceKey: string;
@@ -48,6 +50,10 @@ export type DbBackedMediaRecordsState<T> = {
   sourceKey: string;
   sourceDescriptor: ResultSourceDescriptor;
   totalCount: number;
+  getWindow: (
+    startIndex: number,
+    limit: number,
+  ) => Promise<ResultWindow<T, SearchDocumentResultCursor>>;
   streamRows: () => AsyncIterable<T>;
 };
 
@@ -495,17 +501,23 @@ export function useDbBackedMediaRecords(
 
   useEffect(() => {
     let cancelled = false;
+    let timeoutHandle: ReturnType<typeof globalThis.setTimeout> | null = null;
     if (!source) {
       setTotalCount(0);
       return;
     }
-    void source.totalCount().then((count) => {
-      if (!cancelled) {
-        setTotalCount(count);
-      }
-    });
+    timeoutHandle = globalThis.setTimeout(() => {
+      void source.totalCount().then((count) => {
+        if (!cancelled) {
+          setTotalCount(count);
+        }
+      });
+    }, MEDIA_COUNT_BACKGROUND_DELAY_MS);
     return () => {
       cancelled = true;
+      if (timeoutHandle !== null) {
+        globalThis.clearTimeout(timeoutHandle);
+      }
     };
   }, [normalizedFolderKey, source]);
 
@@ -514,6 +526,11 @@ export function useDbBackedMediaRecords(
     sourceKey: source.key,
     sourceDescriptor: source.descriptor,
     totalCount,
+    getWindow: async (startIndex: number, limit: number) => {
+      const window = await source.getWindow({ startIndex, limit });
+      setTotalCount((current) => Math.max(current, window.totalCount));
+      return window;
+    },
     streamRows: () => source.streamRows(),
   };
 }

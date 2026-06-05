@@ -19,6 +19,9 @@ const columnHelper = createColumnHelper<User>();
 export const columns = [
   columnHelper.display({
     id: 'select',
+    size: 48,
+    minSize: 48,
+    maxSize: 48,
     meta: { exportable: false },
     header: ({ table }) => (
       <input
@@ -55,11 +58,15 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('rest_id', {
+    size: 112,
+    minSize: 112,
     meta: { exportKey: 'id', exportHeader: 'ID' },
     header: () => <Trans i18nKey="ID" />,
     cell: (info) => <p class="w-20 break-all font-mono text-xs">{info.getValue()}</p>,
   }),
   columnHelper.accessor('core.screen_name', {
+    size: 144,
+    minSize: 120,
     meta: { exportKey: 'screen_name', exportHeader: 'Screen Name' },
     header: () => <Trans i18nKey="Screen Name" />,
     cell: (info) => (
@@ -71,11 +78,16 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('core.name', {
+    size: 184,
+    minSize: 144,
     meta: { exportKey: 'name', exportHeader: 'Profile Name' },
     header: () => <Trans i18nKey="Profile Name" />,
     cell: (info) => <p class="w-32">{info.getValue()}</p>,
   }),
   columnHelper.accessor('legacy.description', {
+    size: 336,
+    minSize: 260,
+    maxSize: 520,
     meta: { exportKey: 'description', exportHeader: 'Description' },
     header: () => <Trans i18nKey="Description" />,
     cell: (info) => (
@@ -91,6 +103,8 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('avatar.image_url', {
+    size: 104,
+    minSize: 92,
     meta: { exportKey: 'profile_image_url', exportHeader: 'Profile Image' },
     header: () => <Trans i18nKey="Profile Image" />,
     cell: (info) => (
@@ -105,6 +119,8 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('legacy.profile_banner_url', {
+    size: 184,
+    minSize: 160,
     meta: { exportKey: 'profile_banner_url', exportHeader: 'Profile Banner' },
     header: () => <Trans i18nKey="Profile Banner" />,
     cell: (info) => (
@@ -126,36 +142,50 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('legacy.followers_count', {
+    size: 104,
+    minSize: 96,
     meta: { exportKey: 'followers_count', exportHeader: 'Followers' },
     header: () => <Trans i18nKey="Followers" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('legacy.friends_count', {
+    size: 120,
+    minSize: 104,
     meta: { exportKey: 'friends_count', exportHeader: 'FollowingCount' },
     header: () => <Trans i18nKey="FollowingCount" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('legacy.statuses_count', {
+    size: 104,
+    minSize: 96,
     meta: { exportKey: 'statuses_count', exportHeader: 'Statuses' },
     header: () => <Trans i18nKey="Statuses" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('legacy.favourites_count', {
+    size: 112,
+    minSize: 104,
     meta: { exportKey: 'favourites_count', exportHeader: 'Favourites' },
     header: () => <Trans i18nKey="Favourites" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('legacy.listed_count', {
+    size: 88,
+    minSize: 80,
     meta: { exportKey: 'listed_count', exportHeader: 'Listed' },
     header: () => <Trans i18nKey="Listed" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('location.location', {
+    size: 176,
+    minSize: 136,
     meta: { exportKey: 'location', exportHeader: 'Location' },
     header: () => <Trans i18nKey="Location" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('legacy.url', {
+    size: 220,
+    minSize: 160,
     meta: { exportKey: 'website', exportHeader: 'Website' },
     header: () => <Trans i18nKey="Website" />,
     cell: (info) => (
@@ -170,6 +200,8 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('legacy_extended_profile.birthdate', {
+    size: 120,
+    minSize: 104,
     meta: {
       exportKey: 'birthdate',
       exportHeader: 'Birthdate',
@@ -179,27 +211,37 @@ export const columns = [
     cell: (info) => <p>{formatTwitterBirthdate(info.getValue()) ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('verification.verified_type', {
+    size: 128,
+    minSize: 112,
     meta: { exportKey: 'verified_type', exportHeader: 'Verified Type' },
     header: () => <Trans i18nKey="Verified Type" />,
     cell: (info) => <p>{info.getValue() ?? 'N/A'}</p>,
   }),
   columnHelper.accessor('is_blue_verified', {
+    size: 128,
+    minSize: 112,
     meta: { exportKey: 'is_blue_verified', exportHeader: 'Blue Verified' },
     header: () => <Trans i18nKey="Blue Verified" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor('relationship_perspectives.following', {
+    size: 112,
+    minSize: 104,
     meta: { exportKey: 'following', exportHeader: 'Following' },
     header: () => <Trans i18nKey="Following" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor('relationship_perspectives.followed_by', {
+    size: 112,
+    minSize: 104,
     meta: { exportKey: 'followed_by', exportHeader: 'Follows You' },
     header: () => <Trans i18nKey="Follows You" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor((row) => row.twe_relationship_fields?.relation_types?.join(', ') || '', {
     id: 'relation_types',
+    size: 160,
+    minSize: 128,
     meta: { exportKey: 'relation_types', exportHeader: 'Relation Types' },
     header: () => <Trans i18nKey="Relation Types" />,
     cell: (info) => <p>{info.getValue() || 'N/A'}</p>,
@@ -208,6 +250,8 @@ export const columns = [
     (row) => row.twe_relationship_fields?.subject_screen_names?.join(', ') || '',
     {
       id: 'subject_screen_names',
+      size: 192,
+      minSize: 160,
       meta: { exportKey: 'subject_screen_names', exportHeader: 'Subject Accounts' },
       header: () => <Trans i18nKey="Subject Accounts" />,
       cell: (info) => <p class="w-40 break-words">{info.getValue() || 'N/A'}</p>,
@@ -215,12 +259,16 @@ export const columns = [
   ),
   columnHelper.accessor((row) => row.twe_relationship_fields?.subject_user_ids?.join(', ') || '', {
     id: 'subject_user_ids',
+    size: 152,
+    minSize: 136,
     meta: { exportKey: 'subject_user_ids', exportHeader: 'Subject User IDs' },
     header: () => <Trans i18nKey="Subject User IDs" />,
     cell: (info) => <p class="w-28 break-all font-mono text-xs">{info.getValue() || 'N/A'}</p>,
   }),
   columnHelper.accessor((row) => row.twe_relationship_fields?.last_observed_at || 0, {
     id: 'last_observed_at',
+    size: 136,
+    minSize: 128,
     meta: {
       exportKey: 'last_observed_at',
       exportHeader: 'Last Observed At',
@@ -240,17 +288,23 @@ export const columns = [
     ),
   }),
   columnHelper.accessor('dm_permissions.can_dm', {
+    size: 88,
+    minSize: 80,
     meta: { exportKey: 'can_dm', exportHeader: 'Can DM' },
     header: () => <Trans i18nKey="Can DM" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor('privacy.protected', {
+    size: 104,
+    minSize: 96,
     meta: { exportKey: 'protected', exportHeader: 'Protected' },
     header: () => <Trans i18nKey="Protected" />,
     cell: (info) => <p>{info.getValue() ? 'YES' : 'NO'}</p>,
   }),
   columnHelper.accessor((row) => +parseTwitterDateTime(row.core.created_at), {
     id: 'created_at',
+    size: 136,
+    minSize: 128,
     meta: {
       exportKey: 'created_at',
       exportHeader: 'Created At',
@@ -269,6 +323,9 @@ export const columns = [
   }),
   columnHelper.display({
     id: 'url',
+    size: 64,
+    minSize: 56,
+    maxSize: 72,
     meta: {
       exportKey: 'url',
       exportHeader: 'URL',
@@ -283,6 +340,8 @@ export const columns = [
   }),
   columnHelper.display({
     id: 'actions',
+    size: 112,
+    minSize: 104,
     meta: { exportable: false },
     header: () => <Trans i18nKey="Actions" />,
     cell: (info) => (

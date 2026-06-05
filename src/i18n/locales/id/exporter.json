@@ -97,5 +97,18 @@
   "filter.photo": "Foto",
   "filter.video": "Video",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "Sertakan retweet"
+  "filter.retweet": "Sertakan retweet",
+  "loading remaining rows": "memuat baris tersisa",
+  "Bundle ZIP compression:": "Kompresi ZIP bundle:",
+  "Fastest / store": "Tercepat / simpan",
+  "Balanced / fast": "Seimbang / cepat",
+  "Smaller / slower": "Lebih kecil / lebih lambat",
+  "Cancel Export": "Batalkan ekspor",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "Ekspor ZIP bundle portabel kanonis untuk berbagi/impor.",
+  "Export Bundle ZIP": "Ekspor ZIP bundle",
+  "Source-backed media": "Media berbasis sumber",
+  "rows scanned:": "baris dipindai:",
+  "media URLs:": "URL media:",
+  "loading": "memuat",
+  "Loading media...": "Memuat media..."
 }

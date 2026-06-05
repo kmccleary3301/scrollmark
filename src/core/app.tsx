@@ -1,6 +1,6 @@
 import { Fragment } from 'preact';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { useTranslation } from '@/i18n';
+import { TranslationKey, useTranslation } from '@/i18n';
 import { useWorkspaceShellState } from './workspace-shell-state';
 import { ControlPanelLauncher } from './control-panel-launcher';
 import { ControlPanelShell } from './control-panel-shell';
@@ -12,7 +12,7 @@ export function App() {
 
   const {
     extensions,
-    currentTheme,
+    resolvedTheme,
     showControlPanel,
     hookStats,
     runtimeModes,
@@ -20,9 +20,16 @@ export function App() {
     toggleControlPanel,
   } = useWorkspaceShellState(t('Open Control Panel'));
 
+  const statusLabel = (value: string | boolean | undefined) => {
+    if (typeof value === 'boolean') return value ? t('on') : t('off');
+    return t(String(value || 'unknown') as TranslationKey);
+  };
+  const ageLabel = (seconds: number | null) =>
+    seconds === null ? '' : t('{{seconds}}s ago', { seconds });
+
   const hookLine = (() => {
     const hs = hookStats.value;
-    if (!hs) return 'Hooks: unknown';
+    if (!hs) return t('Hooks: {{status}}', { status: t('unknown') });
     const ageSec = hs.lastAt ? Math.max(0, Math.floor((Date.now() - hs.lastAt) / 1000)) : null;
     let short = hs.lastUrl || '';
     try {
@@ -32,28 +39,60 @@ export function App() {
       // ignore
     }
     if (short.length > 48) short = short.slice(0, 45) + '...';
-    const age = ageSec === null ? '' : ` (${ageSec}s ago)`;
-    return (
-      `Hooks: xhr ${hs.xhrMessages}, fetch ${hs.fetchMessages}` +
-      (hs.lastUrl ? `, last ${short}${age}` : '')
-    );
+    const age = ageLabel(ageSec);
+    return hs.lastUrl
+      ? t('Hooks: xhr {{xhr}}, fetch {{fetch}}, last {{url}} ({{age}})', {
+          xhr: hs.xhrMessages,
+          fetch: hs.fetchMessages,
+          url: short,
+          age,
+        })
+      : t('Hooks: xhr {{xhr}}, fetch {{fetch}}', {
+          xhr: hs.xhrMessages,
+          fetch: hs.fetchMessages,
+        });
   })();
 
   const healthLine = (() => {
     const modes = runtimeModes.value;
     const raw = rawCaptureStats.value;
-    const safeMode = modes?.safeMode ? 'on' : 'off';
-    const hookMode = modes?.hookMode || 'unknown';
-    const repairMode = modes?.repairMode || 'unknown';
+    const safeMode = statusLabel(modes?.safeMode);
+    const hookMode = statusLabel(modes?.hookMode);
+    const repairMode = statusLabel(modes?.repairMode);
     const rawTotal = Number(raw?.total || 0);
     const spool = Number(raw?.spool_count || 0);
-    const daemon = raw?.daemon_online ? 'on' : 'off';
-    const monitorRole = raw?.monitor_role || 'unknown';
+    const daemon = statusLabel(raw?.daemon_online);
+    const monitorRole = statusLabel(raw?.monitor_role);
     const rawAgeSec = raw?.last_at
       ? Math.max(0, Math.floor((Date.now() - raw.last_at) / 1000))
       : null;
-    const age = rawAgeSec === null ? '' : `, raw ${rawAgeSec}s ago`;
-    return `Mode: safe ${safeMode}, hook ${hookMode}, repair ${repairMode} | raw ${rawTotal}, spool ${spool}, daemon ${daemon}, monitor ${monitorRole}${age}`;
+    const age = ageLabel(rawAgeSec);
+    return age
+      ? t(
+          'Mode: safe {{safe}}, hook {{hook}}, repair {{repair}} | raw {{raw}}, spool {{spool}}, daemon {{daemon}}, monitor {{monitor}}, raw {{age}}',
+          {
+            safe: safeMode,
+            hook: hookMode,
+            repair: repairMode,
+            raw: rawTotal,
+            spool,
+            daemon,
+            monitor: monitorRole,
+            age,
+          },
+        )
+      : t(
+          'Mode: safe {{safe}}, hook {{hook}}, repair {{repair}} | raw {{raw}}, spool {{spool}}, daemon {{daemon}}, monitor {{monitor}}',
+          {
+            safe: safeMode,
+            hook: hookMode,
+            repair: repairMode,
+            raw: rawTotal,
+            spool,
+            daemon,
+            monitor: monitorRole,
+          },
+        );
   })();
 
   const sortedExtensions = extensions.value.slice().sort(compareWidgetExtensions);
@@ -73,12 +112,9 @@ export function App() {
 
   return (
     <Fragment>
-      <ControlPanelLauncher
-        currentTheme={currentTheme.value || 'system'}
-        onToggle={toggleControlPanel}
-      />
+      <ControlPanelLauncher currentTheme={resolvedTheme.value} onToggle={toggleControlPanel} />
       <ControlPanelShell
-        currentTheme={currentTheme.value || 'system'}
+        currentTheme={resolvedTheme.value}
         show={!!showControlPanel.value}
         title="Scrollmark"
         byline="By Kyle McCleary"

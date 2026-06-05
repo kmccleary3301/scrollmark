@@ -97,5 +97,18 @@
   "filter.photo": "Фото",
   "filter.video": "Видео",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "Включить ретвиты"
+  "filter.retweet": "Включить ретвиты",
+  "loading remaining rows": "загрузка оставшихся строк",
+  "Bundle ZIP compression:": "Сжатие ZIP-бандла:",
+  "Fastest / store": "Самое быстрое / store",
+  "Balanced / fast": "Сбалансировано / быстро",
+  "Smaller / slower": "Меньше / медленнее",
+  "Cancel Export": "Отменить экспорт",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "Экспортировать канонический переносимый ZIP-бандл для передачи/импорта.",
+  "Export Bundle ZIP": "Экспортировать ZIP-бандл",
+  "Source-backed media": "Медиа с поддержкой источника",
+  "rows scanned:": "просканировано строк:",
+  "media URLs:": "URL медиа:",
+  "loading": "загрузка",
+  "Loading media...": "Загрузка медиа..."
 }

@@ -97,5 +97,18 @@
   "filter.photo": "写真",
   "filter.video": "動画",
   "filter.animated_gif": "GIF",
-  "filter.retweet": "リツイートを含める"
+  "filter.retweet": "リツイートを含める",
+  "loading remaining rows": "残りの行を読み込み中",
+  "Bundle ZIP compression:": "バンドル ZIP 圧縮:",
+  "Fastest / store": "最速 / store",
+  "Balanced / fast": "バランス / 高速",
+  "Smaller / slower": "小さめ / 低速",
+  "Cancel Export": "エクスポートをキャンセル",
+  "Export a canonical portable ZIP bundle for sharing/importing.": "共有/インポート用の正規ポータブル ZIP バンドルをエクスポートします。",
+  "Export Bundle ZIP": "バンドル ZIP をエクスポート",
+  "Source-backed media": "ソース対応メディア",
+  "rows scanned:": "スキャン済み行:",
+  "media URLs:": "メディア URL:",
+  "loading": "読み込み中",
+  "Loading media...": "メディアを読み込み中..."
 }

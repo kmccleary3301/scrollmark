@@ -6,10 +6,12 @@ import logger from '@/utils/logger';
 
 import extensionManager, { Extension } from './extensions';
 import { options } from './options';
+import { useResolvedAppTheme } from './page-theme';
 
 export function useWorkspaceShellState(openControlPanelLabel: string) {
   const extensions = useSignal<Extension[]>(extensionManager.getExtensions());
   const currentTheme = useSignal(options.get('theme'));
+  const resolvedTheme = useResolvedAppTheme(currentTheme.value);
   const showControlPanel = useSignal(options.get('showControlPanel'));
   const hookStats = useSignal<{
     xhrMessages: number;
@@ -113,6 +115,7 @@ export function useWorkspaceShellState(openControlPanelLabel: string) {
   return {
     extensions,
     currentTheme,
+    resolvedTheme,
     showControlPanel,
     hookStats,
     runtimeModes,

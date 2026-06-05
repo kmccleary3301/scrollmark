@@ -2,7 +2,7 @@ import { ComponentType, JSX } from 'preact';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
 import { Modal, MultiSelect } from '@/components/common';
-import { useTranslation } from '@/i18n';
+import { TranslationKey, useTranslation } from '@/i18n';
 import {
   extractHydrationRecordId,
   extractStableRecordId,
@@ -13,7 +13,12 @@ import { appendSearchHistoryEntry, readSearchHistory } from '@/utils/search-hist
 import { useSignalState, useToggle } from '@/utils/common';
 import { nowMs, recordPerfMetric } from '@/core/perf/metrics';
 import type { SearchDocumentRow } from '@/core/database/manager';
-import type { ResultEntityType, ResultSourceDescriptor } from '@/core/database/result-source';
+import type {
+  ResultEntityType,
+  ResultSourceDescriptor,
+  ResultWindow,
+  SearchDocumentResultCursor,
+} from '@/core/database/result-source';
 import { createExplicitSelectionResultSource } from '@/core/database/id-result-sources';
 import { flexRender, useReactTable } from '@/utils/react-table';
 import {
@@ -100,7 +105,12 @@ type BaseTableViewProps<T> = {
   onSourceWindowChange?: (startIndex: number, endIndex: number) => void;
   streamSourceRows?: () => AsyncIterable<T>;
   streamMediaRows?: () => AsyncIterable<T>;
+  mediaSourceKey?: string;
   mediaSourceTotalCount?: number;
+  getMediaWindow?: (
+    startIndex: number,
+    limit: number,
+  ) => Promise<ResultWindow<T, SearchDocumentResultCursor>>;
   onBookmarkFolderSelectionChange?: (folderIds: string[]) => void;
   loadMore?: () => Promise<void>;
   loadAll?: () => Promise<void>;
@@ -157,7 +167,12 @@ export type BaseTableAlternateViewProps<T> = {
   sourceTotalCount?: number;
   streamSourceRows?: () => AsyncIterable<T>;
   streamMediaRows?: () => AsyncIterable<T>;
+  mediaSourceKey?: string;
   mediaSourceTotalCount?: number;
+  getMediaWindow?: (
+    startIndex: number,
+    limit: number,
+  ) => Promise<ResultWindow<T, SearchDocumentResultCursor>>;
   onDiagnosticsChange?: (diagnostics: BaseTableAlternateViewDiagnostics | null) => void;
 };
 
@@ -384,7 +399,9 @@ export function BaseTableView<T>({
   onSourceWindowChange,
   streamSourceRows,
   streamMediaRows,
+  mediaSourceKey,
   mediaSourceTotalCount,
+  getMediaWindow,
   onBookmarkFolderSelectionChange,
   loadMore,
   loadAll,
@@ -872,6 +889,11 @@ export function BaseTableView<T>({
   const table = useReactTable<T>({
     data: visibleRecords,
     columns,
+    defaultColumn: {
+      size: 160,
+      minSize: 48,
+      maxSize: 520,
+    },
     enableRowSelection: true,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (record, index) => extractStableRecordId(record, visibleStartIndex + index),
@@ -906,6 +928,8 @@ export function BaseTableView<T>({
     },
   });
   const visibleRows = table.getRowModel().rows;
+  const visibleLeafColumns = table.getVisibleLeafColumns();
+  const stableTableWidth = visibleLeafColumns.reduce((sum, column) => sum + column.getSize(), 0);
 
   useEffect(() => {
     if (firstRowsReportedRef.current || !visibleRows.length) return;
@@ -1248,8 +1272,8 @@ export function BaseTableView<T>({
   };
 
   const rootClass = isFullscreen
-    ? 'relative flex h-full min-h-0 flex-col overflow-hidden bg-base-100 text-base-content'
-    : 'relative flex h-full min-h-0 flex-col';
+    ? 'relative flex min-h-0 grow flex-col overflow-hidden bg-base-100 text-base-content'
+    : 'relative flex min-h-0 grow flex-col';
 
   const ActiveAlternateView = activeAlternateView?.component;
 
@@ -1269,7 +1293,9 @@ export function BaseTableView<T>({
               type="text"
               class="grow bg-transparent text-sm"
               value={searchQuery}
-              placeholder='Search with operators, phrases, and boolean logic: from:alice ("design system"~2 OR reliability)'
+              placeholder={t(
+                'Search with operators, phrases, and boolean logic: from:alice ("design system"~2 OR reliability)',
+              )}
               onInput={(event) => setSearchQuery((event.target as HTMLInputElement).value)}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') {
@@ -1280,7 +1306,7 @@ export function BaseTableView<T>({
             {searchQuery ? (
               <button
                 class="btn btn-ghost btn-xs"
-                title="Clear search"
+                title={t('Clear search')}
                 onClick={() => setSearchQuery('')}
               >
                 <IconX size={14} />
@@ -1299,7 +1325,11 @@ export function BaseTableView<T>({
               }
             />
           ) : null}
-          <button class="btn btn-ghost btn-sm" onClick={toggleShowSearchHelp} title="Search help">
+          <button
+            class="btn btn-ghost btn-sm"
+            onClick={toggleShowSearchHelp}
+            title={t('Search help')}
+          >
             <IconInfoCircle size={18} />
           </button>
           {alternateViews?.length ? (
@@ -1307,7 +1337,7 @@ export function BaseTableView<T>({
               <button
                 class={`btn join-item btn-sm ${activeViewId === 'table' ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setActiveViewId('table')}
-                title="Table view"
+                title={t('Table view')}
               >
                 <IconTable size={16} />
               </button>
@@ -1325,8 +1355,10 @@ export function BaseTableView<T>({
                     disabled={viewBlocked}
                     title={
                       viewBlocked
-                        ? `${view.label} is disabled for large source-backed result sets.`
-                        : view.label
+                        ? t('{{view}} is disabled for large source-backed result sets.', {
+                            view: view.label,
+                          })
+                        : t(view.label as TranslationKey)
                     }
                   >
                     {view.icon === 'grid' ? <IconLayoutGrid size={16} /> : <IconTable size={16} />}
@@ -1338,7 +1370,7 @@ export function BaseTableView<T>({
           <button
             class="btn btn-ghost btn-sm"
             onClick={() => setIsFullscreen((current) => !current)}
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            title={isFullscreen ? t('Exit fullscreen') : t('Fullscreen')}
           >
             {isFullscreen ? <IconArrowsMinimize size={18} /> : <IconArrowsMaximize size={18} />}
           </button>
@@ -1378,17 +1410,36 @@ export function BaseTableView<T>({
         <div class="mt-1 flex min-w-0 items-center justify-between gap-3 overflow-hidden whitespace-nowrap text-[10px] leading-4 font-mono opacity-70">
           <span class="min-w-0 flex-1 truncate">
             {activeAlternateView
-              ? `${activeAlternateView.label} view${
-                  alternateDiagnostics?.primary ? ` - ${alternateDiagnostics.primary}` : ''
-                }`
+              ? alternateDiagnostics?.primary
+                ? t('{{view}} view - {{status}}', {
+                    view: t(activeAlternateView.label as TranslationKey),
+                    status: alternateDiagnostics.primary,
+                  })
+                : t('{{view}} view', { view: t(activeAlternateView.label as TranslationKey) })
               : loading
-                ? `loading ${loadedCount}/${Math.max(totalCount, records.length)}`
+                ? t('loading {{loaded}}/{{total}}', {
+                    loaded: loadedCount,
+                    total: Math.max(totalCount, records.length),
+                  })
                 : normalizedSearchQuery
-                  ? `${searchPending ? 'searching' : 'matches'} ${searchResult.totalMatches}/${records.length}`
+                  ? searchPending
+                    ? t('searching {{matches}}/{{total}}', {
+                        matches: searchResult.totalMatches,
+                        total: records.length,
+                      })
+                    : t('matches {{matches}}/{{total}}', {
+                        matches: searchResult.totalMatches,
+                        total: records.length,
+                      })
                   : hasMore || totalCount > records.length
-                    ? `rows ${records.length}/${Math.max(totalCount, records.length)}`
-                    : `rows ${records.length}`}
-            {!activeAlternateView && !normalizedSearchQuery && loadingMore ? ' buffering...' : ''}
+                    ? t('rows {{loaded}}/{{total}}', {
+                        loaded: records.length,
+                        total: Math.max(totalCount, records.length),
+                      })
+                    : t('rows {{count}}', { count: records.length })}
+            {!activeAlternateView && !normalizedSearchQuery && loadingMore
+              ? ` ${t('buffering...')}`
+              : ''}
           </span>
           <div class="flex shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap">
             {activeAlternateView ? (
@@ -1405,15 +1456,24 @@ export function BaseTableView<T>({
             ) : (
               <>
                 {searchHistoryScope ? (
-                  <span class="hidden lg:inline">history {searchHistoryCount}</span>
+                  <span class="hidden lg:inline">
+                    {t('history {{count}}', { count: searchHistoryCount })}
+                  </span>
                 ) : null}
                 <span class="hidden md:inline">
-                  selected {selectedResultCount} ({selectionMode})
+                  {t('selected {{count}} ({{mode}})', {
+                    count: selectedResultCount,
+                    mode: t(selectionMode as TranslationKey),
+                  })}
                 </span>
                 {tableTelemetryActive ? (
                   <span class="hidden sm:inline">
-                    rendered {visibleRows.length}/{totalRows} (window {visibleStartIndex + 1}-
-                    {visibleEndIndex || 0})
+                    {t('rendered {{rendered}}/{{total}} (window {{start}}-{{end}})', {
+                      rendered: visibleRows.length,
+                      total: totalRows,
+                      start: visibleStartIndex + 1,
+                      end: visibleEndIndex || 0,
+                    })}
                   </span>
                 ) : null}
               </>
@@ -1426,7 +1486,7 @@ export function BaseTableView<T>({
       <main
         ref={scrollAreaRef}
         onScroll={onTableScroll}
-        class="max-w-full grow overflow-y-auto overflow-x-auto bg-base-200 overscroll-none rounded-box-half border border-base-300"
+        class="max-w-full min-h-0 grow overflow-y-auto overflow-x-auto bg-base-200 overscroll-none rounded-box-half border border-base-300"
       >
         {ActiveAlternateView && activeAlternateViewBlocked ? (
           <div class="flex h-[320px] flex-col items-center justify-center gap-3 px-4 text-center text-sm">
@@ -1448,7 +1508,9 @@ export function BaseTableView<T>({
             sourceMode={sourceMode}
             sourceTotalCount={totalCount}
             streamSourceRows={streamSourceRows}
+            mediaSourceKey={mediaSourceKey}
             mediaSourceTotalCount={mediaSourceTotalCount}
+            getMediaWindow={getMediaWindow}
             streamMediaRows={streamMediaRows}
             onDiagnosticsChange={handleAlternateDiagnosticsChange}
             onOpenMedia={(url) => {
@@ -1458,7 +1520,15 @@ export function BaseTableView<T>({
           />
         ) : (
           <>
-            <table class="table table-pin-rows table-border-bc table-padding-sm">
+            <table
+              class="table table-fixed table-pin-rows table-border-bc table-padding-sm"
+              style={{ width: `max(${stableTableWidth}px, 100%)` }}
+            >
+              <colgroup>
+                {visibleLeafColumns.map((column) => (
+                  <col key={column.id} style={{ width: `${column.getSize()}px` }} />
+                ))}
+              </colgroup>
               <thead>
                 {table.getHeaderGroups().map((headerGroup) => (
                   <tr key={headerGroup.id}>
@@ -1551,13 +1621,15 @@ export function BaseTableView<T>({
           disabled={loading}
           title={
             preparingExport
-              ? 'Export menu is open while remaining rows load in the background.'
+              ? t('Export menu is open while remaining rows load in the background.')
               : loading
-                ? 'Wait for records to finish loading before exporting.'
+                ? t('Wait for records to finish loading before exporting.')
                 : sourceBrowsingActive && streamSourceRows
-                  ? 'Exports stream from the active source without loading all rows into the table.'
+                  ? t(
+                      'Exports stream from the active source without loading all rows into the table.',
+                    )
                   : hasMore && !normalizedSearchQuery
-                    ? 'Opens immediately and loads remaining rows in the background.'
+                    ? t('Opens immediately and loads remaining rows in the background.')
                     : undefined
           }
         >
@@ -1624,17 +1696,16 @@ export function BaseTableView<T>({
 
       {/* Search help modal. */}
       <Modal
-        title="Search Operators"
-        class="max-w-2xl"
+        title={t('Search Operators')}
+        class="max-w-2xl max-h-[calc(100vh-2rem)] overflow-hidden"
         show={showSearchHelp}
         onClose={toggleShowSearchHelp}
       >
-        <div class="text-sm leading-6">
+        <div class="min-h-0 grow overflow-y-auto pr-1 text-sm leading-6">
           <p class="mb-2">
-            Query semantics now follow recorder-style precedence:
+            {t('Query semantics now follow recorder-style precedence:')}{' '}
             <code class="ml-1">NOT</code>,<code class="ml-1">AND</code>,<code class="ml-1">OR</code>
-            , with implicit
-            <code class="ml-1">AND</code> between adjacent terms.
+            , {t('with implicit')} <code class="ml-1">AND</code> {t('between adjacent terms.')}
           </p>
           <div class="grid gap-3 md:grid-cols-2">
             {operatorHelpGroups.map(([category, entries]) => (
@@ -1643,13 +1714,13 @@ export function BaseTableView<T>({
                 class="rounded-box-half border border-base-300 bg-base-200/70 p-3"
               >
                 <h4 class="mb-2 text-xs font-semibold uppercase tracking-[0.08em] opacity-70">
-                  {category.replace('_', ' ')}
+                  {t(`search.category.${category}` as TranslationKey)}
                 </h4>
                 <div class="space-y-2">
                   {entries.map((entry) => (
                     <div key={`${category}-${entry.syntax}`} class="text-xs">
                       <div class="font-mono text-[11px] text-info">{entry.syntax}</div>
-                      <div>{entry.description}</div>
+                      <div>{t(entry.description as TranslationKey)}</div>
                       <div class="font-mono opacity-70">{entry.examples.join(' | ')}</div>
                     </div>
                   ))}

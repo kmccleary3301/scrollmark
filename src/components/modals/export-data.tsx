@@ -558,7 +558,7 @@ export function ExportDataModal<T>({
           {resultSetPreparing ? (
             <span class="ml-2 inline-flex items-center gap-1 text-xs opacity-70">
               <span class="loading loading-spinner loading-xs" />
-              loading remaining rows
+              {t('loading remaining rows')}
             </span>
           ) : null}
         </div>
@@ -626,7 +626,7 @@ export function ExportDataModal<T>({
           </select>
         </div>
         <div class="flex items-center gap-2">
-          <p class="leading-8">Bundle ZIP compression:</p>
+          <p class="leading-8">{t('Bundle ZIP compression:')}</p>
           <select
             class="select select-bordered select-sm w-44"
             value={String(bundleCompressionLevel)}
@@ -634,9 +634,9 @@ export function ExportDataModal<T>({
               setBundleCompressionLevel(Number((e.target as HTMLSelectElement).value) as 0 | 1 | 6)
             }
           >
-            <option value="0">Fastest / store</option>
-            <option value="1">Balanced / fast</option>
-            <option value="6">Smaller / slower</option>
+            <option value="0">{t('Fastest / store')}</option>
+            <option value="1">{t('Balanced / fast')}</option>
+            <option value="6">{t('Smaller / slower')}</option>
           </select>
         </div>
         {activeSourceCount > 0 ? null : (
@@ -660,15 +660,15 @@ export function ExportDataModal<T>({
       <div class="flex space-x-2">
         <span class="flex-grow" />
         <button class="btn" onClick={onCancel}>
-          {bundleLoading || loading ? 'Cancel Export' : t('Cancel')}
+          {bundleLoading || loading ? t('Cancel Export') : t('Cancel')}
         </button>
         <button
           class={cx('btn btn-secondary', (bundleLoading || !canExport) && 'btn-disabled')}
           onClick={onExportBundle}
-          title="Export a canonical portable ZIP bundle for sharing/importing."
+          title={t('Export a canonical portable ZIP bundle for sharing/importing.')}
         >
           {bundleLoading && <span class="loading loading-spinner" />}
-          Export Bundle ZIP
+          {t('Export Bundle ZIP')}
         </button>
         <button
           class={cx('btn btn-primary', (loading || !canExport) && 'btn-disabled')}
