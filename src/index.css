@@ -24,6 +24,31 @@
     padding-bottom: 0.5rem /* 8px */;
   }
 
+  .scrollmark-table-cell {
+    min-width: 0;
+    max-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    vertical-align: top;
+  }
+
+  .scrollmark-table-cell-content {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .scrollmark-table-cell-content :where(a, p, span, div, code, pre) {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .scrollmark-table-cell-content :where(.whitespace-pre, .whitespace-pre-wrap) {
+    white-space: pre-wrap;
+  }
+
   /* Hide scrollbar for Chrome, Safari and Opera. */
   .no-scrollbar::-webkit-scrollbar {
     display: none;

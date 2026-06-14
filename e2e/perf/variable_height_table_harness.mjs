@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global process, console, window, document, HTMLElement, HTMLTableRowElement, Event */
+/* global process, console, window, document, HTMLElement, HTMLTableRowElement, Event, performance */
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -105,6 +105,16 @@ async function readPerfEvents(page) {
   });
 }
 
+async function readPerfSummary(page) {
+  return await page.evaluate(() => {
+    const summary = window.__twe_perf_summary_v1;
+    if (!summary || typeof summary !== 'object') return {};
+    return {
+      counters: summary.counters || {},
+    };
+  });
+}
+
 async function collectGeometry(page, label) {
   return await page.evaluate((sampleLabel) => {
     const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
@@ -124,6 +134,36 @@ async function collectGeometry(page, label) {
         height: rect.height,
         hasMedia: text.includes('Synthetic media thumbnail') || text.includes('ALT'),
       };
+    });
+    const cellOverflows = [];
+    rows.forEach((row, rowIndex) => {
+      const cells = Array.from(row.querySelectorAll('td'));
+      cells.forEach((cell, cellIndex) => {
+        const cellRect = cell.getBoundingClientRect();
+        const scrollOverflow = cell.scrollWidth - cell.clientWidth;
+        const descendants = Array.from(cell.querySelectorAll('*'));
+        const visualOverflow = descendants.reduce(
+          (worst, node) => {
+            const rect = node.getBoundingClientRect();
+            if (!rect.width && !rect.height) return worst;
+            return {
+              left: Math.min(worst.left, rect.left - cellRect.left),
+              right: Math.max(worst.right, rect.right - cellRect.right),
+            };
+          },
+          { left: 0, right: 0 },
+        );
+        if (scrollOverflow > 2 || visualOverflow.left < -2 || visualOverflow.right > 2) {
+          cellOverflows.push({
+            rowIndex,
+            cellIndex,
+            key: row.dataset.vrowKey || '',
+            scrollOverflow,
+            visualOverflow,
+            text: (cell.textContent || '').slice(0, 160),
+          });
+        }
+      });
     });
     const gaps = [];
     const overlaps = [];
@@ -154,6 +194,7 @@ async function collectGeometry(page, label) {
       mediaRows: rects.filter((row) => row.hasMedia).length,
       gaps,
       overlaps,
+      cellOverflows,
       translated: visibleText.includes('内容') && visibleText.includes('导出数据'),
       summary,
     };
@@ -175,6 +216,116 @@ async function scrollTableTo(page, ratio) {
     }
   }, ratio);
   await page.waitForTimeout(550);
+}
+
+async function stressScrollTable(page) {
+  return await page.evaluate(async () => {
+    const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
+      item.textContent?.includes('Synthetic bookmark'),
+    );
+    const scrollArea = dialog?.querySelector('main');
+    if (!(scrollArea instanceof HTMLElement)) {
+      return { ok: false, reason: 'table scroll area not found' };
+    }
+
+    const longFrames = [];
+    const sampledWindows = [];
+    let previousFrameAt = performance.now();
+    for (let index = 0; index < 96; index += 1) {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      const now = performance.now();
+      const frameMs = now - previousFrameAt;
+      if (frameMs > 200) {
+        longFrames.push({ index, frameMs });
+      }
+      previousFrameAt = now;
+
+      const sweep = index % 32;
+      const ratio = sweep < 16 ? sweep / 15 : (31 - sweep) / 15;
+      scrollArea.scrollTop = Math.max(
+        0,
+        (scrollArea.scrollHeight - scrollArea.clientHeight) * ratio,
+      );
+      scrollArea.dispatchEvent(new Event('scroll', { bubbles: true }));
+
+      if (index % 12 === 0) {
+        const rows = Array.from(dialog.querySelectorAll('tbody tr[data-vrow="1"]')).filter(
+          (row) => row instanceof HTMLTableRowElement,
+        );
+        const bufferingPlaceholders = Array.from(
+          dialog.querySelectorAll('tbody tr[data-source-buffering-window="1"]'),
+        ).filter((row) => row instanceof HTMLTableRowElement);
+        const summary = Array.from(dialog.querySelectorAll('.font-mono'))
+          .map((item) => item.textContent || '')
+          .filter((text) => text.includes('rendered'))
+          .slice(-1)[0];
+        sampledWindows.push({
+          index,
+          rowCount: rows.length,
+          bufferingPlaceholderCount: bufferingPlaceholders.length,
+          scrollTop: scrollArea.scrollTop,
+          summary,
+        });
+      }
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const rows = Array.from(dialog.querySelectorAll('tbody tr[data-vrow="1"]')).filter(
+      (row) => row instanceof HTMLTableRowElement,
+    );
+    return {
+      ok: true,
+      rowCount: rows.length,
+      scrollTop: scrollArea.scrollTop,
+      scrollHeight: scrollArea.scrollHeight,
+      clientHeight: scrollArea.clientHeight,
+      longFrames,
+      sampledWindows,
+    };
+  });
+}
+
+async function collectSearchHelpOverlay(page) {
+  await page
+    .locator('dialog.modal-open')
+    .filter({ hasText: 'Synthetic bookmark' })
+    .getByTitle('Search help')
+    .click();
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('dialog.modal-open')).some((dialog) =>
+      dialog.textContent?.includes('Query semantics'),
+    ),
+  );
+  const state = await page.evaluate(() => {
+    const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
+      item.textContent?.includes('Query semantics'),
+    );
+    const box = dialog?.querySelector('.modal-box');
+    const rect = box?.getBoundingClientRect();
+    return {
+      open: Boolean(dialog),
+      width: rect?.width || 0,
+      height: rect?.height || 0,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      clipped:
+        !rect ||
+        rect.left < -1 ||
+        rect.top < -1 ||
+        rect.right > window.innerWidth + 1 ||
+        rect.bottom > window.innerHeight + 1,
+    };
+  });
+  await page.evaluate(() => {
+    const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
+      item.textContent?.includes('Query semantics'),
+    );
+    const closeButton = dialog?.querySelector('header .cursor-pointer');
+    if (closeButton instanceof HTMLElement) closeButton.click();
+  });
+  await page.waitForTimeout(100);
+  return state;
 }
 
 const errors = [];
@@ -210,6 +361,7 @@ try {
     return Boolean(dialog?.textContent?.includes('Synthetic bookmark'));
   });
 
+  const searchHelpOverlay = await collectSearchHelpOverlay(page);
   const normalTop = await collectGeometry(page, 'normal-top');
   await scrollTableTo(page, 0.5);
   const normalMiddle = await collectGeometry(page, 'normal-middle');
@@ -223,9 +375,11 @@ try {
   const fullscreenTop = await collectGeometry(page, 'fullscreen-top');
   await scrollTableTo(page, 0.7);
   const fullscreenDeep = await collectGeometry(page, 'fullscreen-deep');
+  const scrollStress = await stressScrollTable(page);
 
   const samples = [normalTop, normalMiddle, normalBottom, fullscreenTop, fullscreenDeep];
   const perfEvents = await readPerfEvents(page);
+  const perfSummary = await readPerfSummary(page);
   const tableVisibleEvents = perfEvents.filter(
     (entry) => entry?.kind === 'viewer' && entry?.name === 'table-visible-rows',
   );
@@ -251,11 +405,23 @@ try {
       details: samples.map(({ label, translated, summary }) => ({ label, translated, summary })),
     },
     {
+      name: 'search help opens as a large unclipped overlay from the small explorer',
+      ok:
+        searchHelpOverlay.open &&
+        searchHelpOverlay.width >= 800 &&
+        searchHelpOverlay.height >= 600 &&
+        !searchHelpOverlay.clipped,
+      details: searchHelpOverlay,
+    },
+    {
       name: 'normal viewport variable-height rows do not overlap or leave persistent gaps',
       ok:
         [normalTop, normalMiddle, normalBottom].every(
           (sample) =>
-            sample.rowCount > 0 && sample.overlaps.length === 0 && sample.gaps.length === 0,
+            sample.rowCount > 0 &&
+            sample.overlaps.length === 0 &&
+            sample.gaps.length === 0 &&
+            sample.cellOverflows.length === 0,
         ) && [normalTop, normalMiddle, normalBottom].some((sample) => sample.tallRows > 0),
       details: [normalTop, normalMiddle, normalBottom],
     },
@@ -264,7 +430,10 @@ try {
       ok:
         [fullscreenTop, fullscreenDeep].every(
           (sample) =>
-            sample.rowCount > 0 && sample.overlaps.length === 0 && sample.gaps.length === 0,
+            sample.rowCount > 0 &&
+            sample.overlaps.length === 0 &&
+            sample.gaps.length === 0 &&
+            sample.cellOverflows.length === 0,
         ) && [fullscreenTop, fullscreenDeep].some((sample) => sample.tallRows > 0),
       details: [fullscreenTop, fullscreenDeep],
     },
@@ -277,16 +446,38 @@ try {
       details: { tableVisibleEvents: tableVisibleEvents.slice(-20), longTasks },
     },
     {
+      name: 'repeated table scroll sweeps remain responsive and bounded',
+      ok:
+        scrollStress.ok === true &&
+        scrollStress.rowCount > 0 &&
+        scrollStress.rowCount <= 90 &&
+        scrollStress.longFrames.length === 0 &&
+        scrollStress.sampledWindows.every(
+          (sample) =>
+            sample.rowCount <= 90 &&
+            (!sample.summary?.includes('buffering') ||
+              sample.rowCount > 0 ||
+              sample.bufferingPlaceholderCount > 0),
+        ),
+      details: scrollStress,
+    },
+    {
       name: 'measured row-height cache is populated and bounded',
       ok:
-        rowHeightCacheEvents.length > 0 &&
-        Math.max(...rowHeightCacheEvents.map((entry) => Number(entry?.value || 0))) > 0 &&
-        rowHeightCacheEvents.every(
-          (entry) =>
-            Number(entry?.value || 0) <= Number(entry?.tags?.limit || 0) &&
-            Number(entry?.tags?.limit || 0) === 2500,
-        ),
-      details: { rowHeightCacheEvents: rowHeightCacheEvents.slice(-20) },
+        (rowHeightCacheEvents.length > 0 ||
+          Number(perfSummary.counters?.['viewer:table-row-height-cache:count'] || 0) > 0) &&
+        (rowHeightCacheEvents.length === 0 ||
+          (Math.max(...rowHeightCacheEvents.map((entry) => Number(entry?.value || 0))) > 0 &&
+            rowHeightCacheEvents.every(
+              (entry) =>
+                Number(entry?.value || 0) <= Number(entry?.tags?.limit || 0) &&
+                Number(entry?.tags?.limit || 0) === 2500,
+            ))),
+      details: {
+        rowHeightCacheEvents: rowHeightCacheEvents.slice(-20),
+        rowHeightCacheSummaryCount:
+          perfSummary.counters?.['viewer:table-row-height-cache:count'] || 0,
+      },
     },
     {
       name: 'variable-height harness has no page errors',

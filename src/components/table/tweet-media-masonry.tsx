@@ -71,6 +71,12 @@ type MasonryColumn = {
   estimatedHeight: number;
 };
 
+type MasonryViewportRange = {
+  start: number;
+  end: number;
+  count: number;
+};
+
 const INITIAL_BATCH = 42;
 const BATCH_SIZE = 24;
 const SCROLL_THRESHOLD_PX = 900;
@@ -263,6 +269,7 @@ export function TweetMediaMasonry({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const firstItemIdRef = useRef('');
   const iteratorRef = useRef<AsyncIterator<Tweet> | null>(null);
+  const viewportRafRef = useRef<number | null>(null);
   const sourceGenerationRef = useRef(0);
   const loadingSourceRef = useRef(false);
   const exhaustedSourceRef = useRef(false);
@@ -276,6 +283,11 @@ export function TweetMediaMasonry({
   const [scannedSourceRows, setScannedSourceRows] = useState(0);
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceExhausted, setSourceExhausted] = useState(false);
+  const [viewportRange, setViewportRange] = useState<MasonryViewportRange>({
+    start: 0,
+    end: 0,
+    count: 0,
+  });
   const activeStreamRows = streamMediaRows ?? streamSourceRows;
   const activeSourceTotalCount = mediaSourceTotalCount ?? sourceTotalCount;
   const sourceCacheKey = useMemo(
@@ -561,6 +573,11 @@ export function TweetMediaMasonry({
   }, [scrollParentRef]);
 
   const visibleItems = items.slice(0, visibleCount);
+  const visibleItemIndexById = useMemo(() => {
+    const indexById = new Map<string, number>();
+    visibleItems.forEach((item, index) => indexById.set(item.id, index));
+    return indexById;
+  }, [visibleItems]);
   const gapPx = density === 'compact' ? COMPACT_GAP : COMFORTABLE_GAP;
   const useNarrowCards = !fullscreen;
   const targetCardWidth =
@@ -587,8 +604,67 @@ export function TweetMediaMasonry({
     () => buildStableColumns(visibleItems, columnCount, columnWidth, density),
     [columnCount, columnWidth, density, visibleItems],
   );
-  const renderedEnd = visibleItems.length;
-  const renderedStart = renderedEnd ? 1 : 0;
+  useEffect(() => {
+    const root = rootRef.current;
+    const scrollParent = scrollParentRef.current;
+    if (!root || !scrollParent) return;
+
+    const measure = () => {
+      viewportRafRef.current = null;
+      const viewportRect = scrollParent.getBoundingClientRect();
+      const cards = Array.from(root.querySelectorAll<HTMLElement>('article[data-masonry-index]'));
+      let start = Number.POSITIVE_INFINITY;
+      let end = -1;
+      let count = 0;
+      for (const card of cards) {
+        const rect = card.getBoundingClientRect();
+        if (rect.bottom < viewportRect.top || rect.top > viewportRect.bottom) continue;
+        const index = Number(card.dataset.masonryIndex ?? -1);
+        if (!Number.isFinite(index) || index < 0) continue;
+        start = Math.min(start, index);
+        end = Math.max(end, index);
+        count += 1;
+      }
+      const nextRange =
+        count > 0
+          ? { start, end, count }
+          : {
+              start: 0,
+              end: Math.max(0, Math.min(visibleItems.length, visibleCount) - 1),
+              count: 0,
+            };
+      setViewportRange((current) =>
+        current.start === nextRange.start &&
+        current.end === nextRange.end &&
+        current.count === nextRange.count
+          ? current
+          : nextRange,
+      );
+    };
+
+    const scheduleMeasure = () => {
+      if (viewportRafRef.current !== null) return;
+      viewportRafRef.current = window.requestAnimationFrame(measure);
+    };
+
+    scheduleMeasure();
+    scrollParent.addEventListener('scroll', scheduleMeasure, { passive: true });
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      scrollParent.removeEventListener('scroll', scheduleMeasure);
+      window.removeEventListener('resize', scheduleMeasure);
+      if (viewportRafRef.current !== null) {
+        window.cancelAnimationFrame(viewportRafRef.current);
+        viewportRafRef.current = null;
+      }
+    };
+  }, [columnCount, density, scrollParentRef, visibleCount, visibleItems.length]);
+
+  const renderedStart = viewportRange.count ? viewportRange.start + 1 : visibleItems.length ? 1 : 0;
+  const renderedEnd = viewportRange.count
+    ? viewportRange.end + 1
+    : Math.min(visibleItems.length, visibleCount);
+  const renderedCount = viewportRange.count || visibleItems.length;
   const sourceStatus = sourceLoading ? 'loading' : sourceExhausted ? 'complete' : 'idle';
   const sourceTotalLabel = activeSourceTotalCount || '?';
   const primaryStatus = useSourceStream
@@ -631,7 +707,7 @@ export function TweetMediaMasonry({
         {
           key: 'rendered',
           label: t('rendered {{rendered}}/{{total}} (window {{start}}-{{end}})', {
-            rendered: visibleItems.length,
+            rendered: renderedCount,
             total: items.length,
             start: renderedStart,
             end: renderedEnd,
@@ -651,7 +727,7 @@ export function TweetMediaMasonry({
                 total: sourceTotalLabel,
                 status: t(sourceStatus),
               })
-            : t('source rows {{count}}', { count: records.length }),
+            : `result rows ${records.length}`,
           minWidth: 'lg',
         },
         {
@@ -679,12 +755,13 @@ export function TweetMediaMasonry({
       records.length,
       renderedEnd,
       renderedStart,
+      renderedCount,
       scannedSourceRows,
       sourceStatus,
       sourceTotalLabel,
       t,
       useSourceStream,
-      visibleItems.length,
+      viewportRange.count,
     ],
   );
 
@@ -721,6 +798,7 @@ export function TweetMediaMasonry({
             {column.items.map((item) => (
               <article
                 key={item.id}
+                data-masonry-index={visibleItemIndexById.get(item.id) ?? 0}
                 class={`overflow-hidden rounded-[20px] border border-base-300 bg-gradient-to-b from-base-100 to-base-200/80 shadow-md ${
                   density === 'compact' ? 'mb-3' : 'mb-4'
                 }`}

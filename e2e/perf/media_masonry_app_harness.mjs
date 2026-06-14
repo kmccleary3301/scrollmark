@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global process, console, window, document, Event */
+/* global process, console, window, document, Event, HTMLElement, MouseEvent */
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -137,7 +137,10 @@ async function mediaState(page) {
     );
     const text = dialog?.textContent || '';
     const mediaMatch = text.match(/media\s+(\d+)\/(\d+)/);
-    const scannedMatch = text.match(/scanned\s+(\d+)\/(\d+|\?)/);
+    const renderedMatch = text.match(/rendered\s+(\d+)\/(\d+)/);
+    const windowMatch = text.match(/rendered\s+\d+\/\d+\s+\(window\s+(\d+)-(\d+)\)/);
+    const loadedMatch = text.match(/loaded media\s+(\d+)/);
+    const scannedMatch = text.match(/(?:scanned|source rows)\s+(\d+)\/(\d+|\?)/);
     const events = Array.isArray(window.__twe_perf_events_v1) ? window.__twe_perf_events_v1 : [];
     const mediaEvents = events.filter(
       (entry) => entry?.kind === 'viewer' && entry?.name === 'media-source-scan',
@@ -153,10 +156,22 @@ async function mediaState(page) {
       : 0;
     return {
       text,
-      visibleMedia: mediaMatch ? Number(mediaMatch[1]) : 0,
-      loadedMedia: mediaMatch ? Number(mediaMatch[2]) : 0,
+      visibleMedia: mediaMatch
+        ? Number(mediaMatch[1])
+        : renderedMatch
+          ? Number(renderedMatch[1])
+          : 0,
+      loadedMedia: mediaMatch
+        ? Number(mediaMatch[2])
+        : loadedMatch
+          ? Number(loadedMatch[1])
+          : renderedMatch
+            ? Number(renderedMatch[2])
+            : 0,
       scannedRows: scannedMatch ? Number(scannedMatch[1]) : 0,
       sourceTotal: scannedMatch && scannedMatch[2] !== '?' ? Number(scannedMatch[2]) : null,
+      windowStart: windowMatch ? Number(windowMatch[1]) : 0,
+      windowEnd: windowMatch ? Number(windowMatch[2]) : 0,
       cardCount: dialog?.querySelectorAll('article').length || 0,
       folderBadgeCount: Array.from(dialog?.querySelectorAll('.badge') || []).filter((item) =>
         /Folder|Synthetic/.test(item.textContent || ''),
@@ -166,6 +181,40 @@ async function mediaState(page) {
       maxScannedRows,
       maxMediaItems,
     };
+  });
+}
+
+async function mediaPreviewState(page) {
+  return await page.evaluate(() => {
+    const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
+      item.textContent?.includes('Keep mini preview after close'),
+    );
+    const box = dialog?.querySelector('.modal-box');
+    const image = dialog?.querySelector('img');
+    const text = dialog?.textContent || '';
+    const rect = box?.getBoundingClientRect();
+    const mini = Array.from(document.querySelectorAll('aside')).find((item) =>
+      item.textContent?.includes('Media View'),
+    );
+    return {
+      open: Boolean(dialog),
+      width: rect?.width || 0,
+      height: rect?.height || 0,
+      hasZoomControls: text.includes('%') && text.includes('Reset'),
+      hasDockToggle: text.includes('Keep mini preview after close'),
+      imageTransform: image instanceof HTMLElement ? image.style.transform : '',
+      miniVisible: Boolean(mini),
+    };
+  });
+}
+
+async function closeMediaPreview(page) {
+  await page.evaluate(() => {
+    const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
+      item.textContent?.includes('Keep mini preview after close'),
+    );
+    const closeButton = dialog?.querySelector('header .cursor-pointer');
+    if (closeButton instanceof HTMLElement) closeButton.click();
   });
 }
 
@@ -224,7 +273,11 @@ try {
       const text = Array.from(document.querySelectorAll('dialog.modal-open'))
         .map((dialog) => dialog.textContent || '')
         .join('\n');
-      return /media\s+[1-9]\d*\/[1-9]\d*/.test(text) && text.includes('scanned');
+      return (
+        (/media\s+[1-9]\d*\/[1-9]\d*/.test(text) || /rendered\s+[1-9]\d*\/[1-9]\d*/.test(text)) &&
+        /loaded media\s+[1-9]\d*/.test(text) &&
+        (text.includes('scanned') || text.includes('source rows'))
+      );
     });
   } catch (error) {
     const bodyText = await page.evaluate(() => document.body.textContent?.slice(0, 4000) || '');
@@ -256,6 +309,51 @@ try {
   });
   await page.waitForTimeout(700);
   const afterScrollMediaState = await mediaState(page);
+
+  await tableModal.locator('article button').first().click();
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('dialog.modal-open')).some((dialog) =>
+      dialog.textContent?.includes('Keep mini preview after close'),
+    ),
+  );
+  const mediaPreviewInitial = await mediaPreviewState(page);
+  await page
+    .locator('dialog.modal-open')
+    .filter({ hasText: 'Keep mini preview after close' })
+    .getByRole('button')
+    .filter({ hasText: /^$/ })
+    .nth(1)
+    .click()
+    .catch(async () => {
+      await page.evaluate(() => {
+        const dialog = Array.from(document.querySelectorAll('dialog.modal-open')).find((item) =>
+          item.textContent?.includes('Keep mini preview after close'),
+        );
+        const buttons = Array.from(dialog?.querySelectorAll('button') ?? []);
+        buttons[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    });
+  await page.waitForTimeout(100);
+  const mediaPreviewZoomed = await mediaPreviewState(page);
+  await closeMediaPreview(page);
+  await page.waitForTimeout(150);
+  const mediaPreviewClosedDefault = await mediaPreviewState(page);
+
+  await tableModal.locator('article button').first().click();
+  await page.waitForFunction(() =>
+    Array.from(document.querySelectorAll('dialog.modal-open')).some((dialog) =>
+      dialog.textContent?.includes('Keep mini preview after close'),
+    ),
+  );
+  await page
+    .locator('dialog.modal-open')
+    .filter({ hasText: 'Keep mini preview after close' })
+    .locator('input[type="checkbox"]')
+    .first()
+    .check();
+  await closeMediaPreview(page);
+  await page.waitForTimeout(150);
+  const mediaPreviewClosedDocked = await mediaPreviewState(page);
 
   let mediaExport = null;
   if (!SKIP_EXPORT) {
@@ -349,6 +447,33 @@ try {
         afterScrollMediaState,
         maxTableHydrated,
         maxSearchDocuments,
+      },
+    },
+    {
+      name: 'masonry diagnostics report the live viewport window after scrolling',
+      ok:
+        initialMediaState.windowStart > 0 &&
+        afterScrollMediaState.windowStart > initialMediaState.windowStart &&
+        afterScrollMediaState.windowEnd > initialMediaState.windowEnd,
+      details: { initialMediaState, afterScrollMediaState },
+    },
+    {
+      name: 'media preview opens as a large top-level explorer with opt-in mini dock',
+      ok:
+        mediaPreviewInitial.open &&
+        mediaPreviewInitial.width >= 900 &&
+        mediaPreviewInitial.height >= 600 &&
+        mediaPreviewInitial.hasZoomControls &&
+        mediaPreviewInitial.hasDockToggle &&
+        /scale\((?!1\))/.test(mediaPreviewZoomed.imageTransform) &&
+        !mediaPreviewClosedDefault.open &&
+        !mediaPreviewClosedDefault.miniVisible &&
+        mediaPreviewClosedDocked.miniVisible,
+      details: {
+        mediaPreviewInitial,
+        mediaPreviewZoomed,
+        mediaPreviewClosedDefault,
+        mediaPreviewClosedDocked,
       },
     },
     ...(SKIP_EXPORT

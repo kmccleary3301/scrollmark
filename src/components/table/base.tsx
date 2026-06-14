@@ -35,6 +35,7 @@ import {
 import { ColumnDef, getCoreRowModel, Row, RowData, Table } from '@tanstack/table-core';
 
 import { ExportDataModal } from '../modals/export-data';
+import { MediaPreviewModal } from './media-preview-modal';
 import { useResultSetController } from './use-result-set-controller';
 
 const VIRTUAL_OVERSCAN_ROWS = 12;
@@ -44,9 +45,13 @@ const VIRTUAL_OVERSCAN_PX = 1600;
 const VIRTUAL_MAX_WINDOW_ROWS = 90;
 const VIRTUAL_SCROLL_UPDATE_PX = 24;
 const ROW_HEIGHT_CACHE_LIMIT = 2500;
+const ROW_HEIGHT_CHANGE_EPSILON = 2;
+const ROW_HEIGHT_ESTIMATE_CALIBRATION_ROWS = 96;
+const ROW_HEIGHT_MEASURE_SCROLL_IDLE_MS = 140;
 const LARGE_ALTERNATE_VIEW_SOURCE_THRESHOLD = 10_000;
 const HIGHLIGHT_ATTRIBUTE = 'data-twe-highlight-v1';
 const CSS_HIGHLIGHT_PREFIX = 'scrollmark-table-search-';
+const MEDIA_PREVIEW_DOCK_KEY = 'scrollmark_media_preview_dock_after_close_v1';
 
 type CssHighlightRegistry = {
   set: (name: string, highlight: unknown) => void;
@@ -431,7 +436,29 @@ export function BaseTableView<T>({
   // Control modal visibility for previewing media and JSON data.
   const [mediaPreview, setMediaPreview] = useSignalState('');
   const [showMediaModal, setShowMediaModal] = useSignalState(false);
+  const [dockMediaPreviewAfterClose, setDockMediaPreviewAfterClose] = useState(() => {
+    try {
+      return localStorage.getItem(MEDIA_PREVIEW_DOCK_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [rawDataPreview, setRawDataPreview] = useSignalState<T | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MEDIA_PREVIEW_DOCK_KEY, dockMediaPreviewAfterClose ? '1' : '0');
+    } catch {
+      // ignore storage failures
+    }
+  }, [dockMediaPreviewAfterClose]);
+
+  const closeMediaPreviewModal = useCallback(() => {
+    setShowMediaModal(false);
+    if (!dockMediaPreviewAfterClose) {
+      setMediaPreview('');
+    }
+  }, [dockMediaPreviewAfterClose, setMediaPreview, setShowMediaModal]);
 
   const [showSearchHelp, toggleShowSearchHelp] = useToggle(false);
   const [searchHistoryCount, setSearchHistoryCount] = useState(0);
@@ -508,13 +535,23 @@ export function BaseTableView<T>({
   );
   useEffect(() => {
     setAlternateDiagnostics(null);
-  }, [activeAlternateView?.id]);
+  }, [activeAlternateView?.id, normalizedSearchQuery]);
   const activeAlternateViewBlocked =
     Boolean(activeAlternateView) &&
     sourceMode &&
     totalCount > LARGE_ALTERNATE_VIEW_SOURCE_THRESHOLD &&
     activeAlternateView?.sourceBacked !== true &&
     !normalizedSearchQuery;
+  const searchScopedAlternateView = Boolean(activeAlternateView && normalizedSearchQuery);
+  const alternateSourceMode = searchScopedAlternateView ? false : sourceMode;
+  const alternateSourceTotalCount = searchScopedAlternateView ? sortedRecords.length : totalCount;
+  const alternateStreamSourceRows = searchScopedAlternateView ? undefined : streamSourceRows;
+  const alternateMediaSourceKey = searchScopedAlternateView ? undefined : mediaSourceKey;
+  const alternateMediaSourceTotalCount = searchScopedAlternateView
+    ? undefined
+    : mediaSourceTotalCount;
+  const alternateGetMediaWindow = searchScopedAlternateView ? undefined : getMediaWindow;
+  const alternateStreamMediaRows = searchScopedAlternateView ? undefined : streamMediaRows;
   const handleBookmarkFolderSelectionChange = (folderIds: string[]) => {
     onBookmarkFolderSelectionChange?.(folderIds);
     setSelectedFolders(folderIds);
@@ -552,6 +589,7 @@ export function BaseTableView<T>({
   const scrollAreaRef = useRef<HTMLElement | null>(null);
   const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
   const scrollTopRef = useRef(0);
+  const lastTableScrollAtRef = useRef(0);
   const scrollRafRef = useRef<number | null>(null);
   const rowHeightsRef = useRef(new Map<string, RowHeightCacheEntry>());
   const highlightHadTermsRef = useRef(false);
@@ -572,6 +610,7 @@ export function BaseTableView<T>({
   const onTableScroll = () => {
     const area = scrollAreaRef.current;
     if (!area) return;
+    lastTableScrollAtRef.current = nowMs();
     scrollTopRef.current = area.scrollTop;
     if (scrollRafRef.current !== null) return;
     scrollRafRef.current = window.requestAnimationFrame(() => {
@@ -727,9 +766,17 @@ export function BaseTableView<T>({
     viewportHeight,
   ]);
 
-  const visibleStartIndex = sourceBrowsingActive ? sourceRenderStartIndex : startIndex;
+  const sourceWindowBuffering =
+    sourceBrowsingActive && loadingMore && totalRows > 0 && visibleRecords.length === 0;
+  const visibleStartIndex = sourceWindowBuffering
+    ? startIndex
+    : sourceBrowsingActive
+      ? sourceRenderStartIndex
+      : startIndex;
   const visibleEndIndex = sourceBrowsingActive
-    ? Math.min(totalRows, sourceRenderStartIndex + visibleRecords.length)
+    ? sourceWindowBuffering
+      ? endIndex
+      : Math.min(totalRows, sourceRenderStartIndex + visibleRecords.length)
     : endIndex;
   const selectionExcludedRecordIds = useMemo(
     () =>
@@ -782,6 +829,9 @@ export function BaseTableView<T>({
   const topSpacerHeight = sourceBrowsingActive
     ? visibleStartIndex * safeRowHeight
     : virtualOffsets[startIndex] || 0;
+  const sourceBufferingSpacerHeight = sourceWindowBuffering
+    ? Math.max(safeRowHeight, Math.max(1, visibleEndIndex - visibleStartIndex) * safeRowHeight)
+    : 0;
   const bottomSpacerHeight = Math.max(
     0,
     totalVirtualHeight -
@@ -1077,57 +1127,83 @@ export function BaseTableView<T>({
   ]);
 
   useEffect(() => {
-    const body = tbodyRef.current;
-    if (!body) return;
-    const renderedRows = body.querySelectorAll('tr[data-vrow="1"]');
-    if (!renderedRows.length) return;
+    const measureRows = () => {
+      const body = tbodyRef.current;
+      if (!body) return;
+      const renderedRows = body.querySelectorAll('tr[data-vrow="1"]');
+      if (!renderedRows.length) return;
 
-    let totalHeight = 0;
-    let measuredCount = 0;
-    let changed = false;
-    renderedRows.forEach((row) => {
-      if (row instanceof HTMLTableRowElement) {
-        const measuredHeight = row.getBoundingClientRect().height;
-        totalHeight += measuredHeight;
-        measuredCount += 1;
-        const key = row.dataset.vrowKey;
-        if (key && Number.isFinite(measuredHeight) && measuredHeight > 0) {
-          const previous = rowHeightsRef.current.get(key);
-          if (!previous || Math.abs(previous.height - measuredHeight) > 2) {
-            rowHeightsRef.current.set(key, {
-              height: measuredHeight,
-              touchedAt: nowMs(),
-            });
-            trimRowHeightCache(rowHeightsRef.current);
-            changed = true;
-          } else {
-            previous.touchedAt = nowMs();
+      let totalHeight = 0;
+      let measuredCount = 0;
+      let changed = false;
+      renderedRows.forEach((row) => {
+        if (row instanceof HTMLTableRowElement) {
+          const measuredHeight = row.getBoundingClientRect().height;
+          totalHeight += measuredHeight;
+          measuredCount += 1;
+          const key = row.dataset.vrowKey;
+          if (key && Number.isFinite(measuredHeight) && measuredHeight > 0) {
+            const previous = rowHeightsRef.current.get(key);
+            const previousHeight = previous?.height ?? safeRowHeight;
+            const heightDelta = measuredHeight - previousHeight;
+            if (!previous || Math.abs(heightDelta) > ROW_HEIGHT_CHANGE_EPSILON) {
+              rowHeightsRef.current.set(key, {
+                height: measuredHeight,
+                touchedAt: nowMs(),
+              });
+              trimRowHeightCache(rowHeightsRef.current);
+              changed = true;
+            } else {
+              previous.touchedAt = nowMs();
+            }
           }
         }
+      });
+      const average = totalHeight / measuredCount;
+      const calibratingEstimate =
+        rowHeightsRef.current.size < ROW_HEIGHT_ESTIMATE_CALIBRATION_ROWS ||
+        virtualScrollTop < viewportHeight * 2 ||
+        totalRows <= VIRTUAL_MAX_WINDOW_ROWS;
+      if (calibratingEstimate && Number.isFinite(average) && average > 16) {
+        setEstimatedRowHeight((current) => {
+          const next = Math.max(24, current * 0.92 + average * 0.08);
+          return Math.abs(next - current) > 4 ? next : current;
+        });
       }
-    });
-    const average = totalHeight / measuredCount;
-    if (Number.isFinite(average) && average > 16) {
-      setEstimatedRowHeight((current) => {
-        const next = Math.max(24, current * 0.85 + average * 0.15);
-        return Math.abs(next - current) > 3 ? next : current;
-      });
-    }
-    if (changed) {
-      setRowHeightsVersion((version) => version + 1);
-      recordPerfMetric({
-        kind: 'viewer',
-        name: 'table-row-height-cache',
-        value: rowHeightsRef.current.size,
-        tags: {
-          ...metricTags,
-          limit: ROW_HEIGHT_CACHE_LIMIT,
-          measuredRows: measuredCount,
-          visibleRows: visibleRows.length,
-        },
-      });
-    }
-  }, [endIndex, metricTags, normalizedSearchQuery, selectedFolders, startIndex, visibleRows]);
+      if (changed) {
+        setRowHeightsVersion((version) => version + 1);
+        recordPerfMetric({
+          kind: 'viewer',
+          name: 'table-row-height-cache',
+          value: rowHeightsRef.current.size,
+          tags: {
+            ...metricTags,
+            limit: ROW_HEIGHT_CACHE_LIMIT,
+            measuredRows: measuredCount,
+            visibleRows: visibleRows.length,
+          },
+        });
+      }
+    };
+
+    const idleDelay = Math.max(
+      0,
+      ROW_HEIGHT_MEASURE_SCROLL_IDLE_MS - (nowMs() - lastTableScrollAtRef.current),
+    );
+    const handle = globalThis.setTimeout(measureRows, idleDelay);
+    return () => globalThis.clearTimeout(handle);
+  }, [
+    endIndex,
+    metricTags,
+    normalizedSearchQuery,
+    safeRowHeight,
+    selectedFolders,
+    startIndex,
+    totalRows,
+    viewportHeight,
+    virtualScrollTop,
+    visibleRows,
+  ]);
 
   useEffect(() => {
     const root = tbodyRef.current;
@@ -1469,7 +1545,7 @@ export function BaseTableView<T>({
                 {tableTelemetryActive ? (
                   <span class="hidden sm:inline">
                     {t('rendered {{rendered}}/{{total}} (window {{start}}-{{end}})', {
-                      rendered: visibleRows.length,
+                      rendered: sourceWindowBuffering ? 0 : visibleRows.length,
                       total: totalRows,
                       start: visibleStartIndex + 1,
                       end: visibleEndIndex || 0,
@@ -1505,13 +1581,13 @@ export function BaseTableView<T>({
             scrollParentRef={scrollAreaRef}
             storageKey={`${resolvedViewStateKey}:${activeAlternateView?.id || 'table'}`}
             fullscreen={isFullscreen}
-            sourceMode={sourceMode}
-            sourceTotalCount={totalCount}
-            streamSourceRows={streamSourceRows}
-            mediaSourceKey={mediaSourceKey}
-            mediaSourceTotalCount={mediaSourceTotalCount}
-            getMediaWindow={getMediaWindow}
-            streamMediaRows={streamMediaRows}
+            sourceMode={alternateSourceMode}
+            sourceTotalCount={alternateSourceTotalCount}
+            streamSourceRows={alternateStreamSourceRows}
+            mediaSourceKey={alternateMediaSourceKey}
+            mediaSourceTotalCount={alternateMediaSourceTotalCount}
+            getMediaWindow={alternateGetMediaWindow}
+            streamMediaRows={alternateStreamMediaRows}
             onDiagnosticsChange={handleAlternateDiagnosticsChange}
             onOpenMedia={(url) => {
               setMediaPreview(url);
@@ -1572,12 +1648,22 @@ export function BaseTableView<T>({
                     }
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      <td key={cell.id} class="scrollmark-table-cell">
+                        <div class="scrollmark-table-cell-content">
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </div>
                       </td>
                     ))}
                   </tr>
                 ))}
+                {sourceBufferingSpacerHeight > 0 ? (
+                  <tr aria-hidden="true" data-source-buffering-window="1">
+                    <td
+                      colSpan={Math.max(1, table.getVisibleFlatColumns().length)}
+                      style={{ height: `${sourceBufferingSpacerHeight}px`, padding: 0, border: 0 }}
+                    />
+                  </tr>
+                ) : null}
                 {bottomSpacerHeight > 0 ? (
                   <tr aria-hidden="true">
                     <td
@@ -1590,7 +1676,7 @@ export function BaseTableView<T>({
             </table>
 
             {/* Empty view. */}
-            {visibleRecords.length > 0 ? null : (
+            {visibleRecords.length > 0 || sourceWindowBuffering ? null : (
               <div class="flex items-center justify-center h-[320px] w-full">
                 <p class="text-base-content text-opacity-50">{t('No data available.')}</p>
               </div>
@@ -1639,7 +1725,7 @@ export function BaseTableView<T>({
       </div>
 
       {/* Media preview widget. */}
-      {mediaPreview && !showMediaModal ? (
+      {dockMediaPreviewAfterClose && mediaPreview && !showMediaModal ? (
         <aside class="absolute right-2 bottom-14 z-[2] w-56 rounded-box-half border border-base-300 bg-base-100 shadow-lg">
           <header class="flex items-center justify-between border-b border-base-300 px-2 py-1 text-xs font-semibold">
             <span>{t('Media View')}</span>
@@ -1647,7 +1733,13 @@ export function BaseTableView<T>({
               <button class="btn btn-ghost btn-xs" onClick={() => setShowMediaModal(true)}>
                 Open
               </button>
-              <button class="btn btn-ghost btn-xs" onClick={() => setMediaPreview('')}>
+              <button
+                class="btn btn-ghost btn-xs"
+                onClick={() => {
+                  setShowMediaModal(false);
+                  setMediaPreview('');
+                }}
+              >
                 <IconX size={12} />
               </button>
             </div>
@@ -1679,25 +1771,18 @@ export function BaseTableView<T>({
       </Modal>
 
       {/* Extra modal for previewing images and videos. */}
-      <Modal
-        title={t('Media View')}
-        class="max-w-xl"
+      <MediaPreviewModal
         show={showMediaModal && !!mediaPreview}
-        onClose={() => setShowMediaModal(false)}
-      >
-        <main class="max-w-full">
-          {mediaPreview.includes('.mp4') ? (
-            <video controls class="w-full max-h-[400px] object-contain" src={mediaPreview} />
-          ) : (
-            <img class="w-full max-h-[400px] object-contain" src={mediaPreview} />
-          )}
-        </main>
-      </Modal>
+        url={mediaPreview}
+        dockAfterClose={dockMediaPreviewAfterClose}
+        onDockAfterCloseChange={setDockMediaPreviewAfterClose}
+        onClose={closeMediaPreviewModal}
+      />
 
       {/* Search help modal. */}
       <Modal
         title={t('Search Operators')}
-        class="max-w-2xl max-h-[calc(100vh-2rem)] overflow-hidden"
+        class="h-[min(88vh,860px)] w-[min(92vw,1040px)] max-w-[92vw] max-h-[88vh] overflow-hidden"
         show={showSearchHelp}
         onClose={toggleShowSearchHelp}
       >

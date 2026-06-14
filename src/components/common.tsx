@@ -1,5 +1,6 @@
 import { JSX } from 'preact';
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { IconArrowUpRight, IconSearch, IconX } from '@tabler/icons-preact';
 
 import { useTranslation } from '@/i18n';
@@ -93,11 +94,18 @@ export function Modal({
   class: className,
   fullscreen,
 }: ModalProps) {
+  const [portalHost, setPortalHost] = useState<Element | null>(null);
+
+  useEffect(() => {
+    if (!show || typeof document === 'undefined') return;
+    setPortalHost(document.getElementById('twe-root') ?? document.body);
+  }, [show]);
+
   if (!show) {
     return <dialog class="modal" />;
   }
 
-  return (
+  const modal = (
     <dialog class={cx('modal modal-open z-[6000]', fullscreen && '!p-0')} open>
       <div
         class={cx(
@@ -128,6 +136,8 @@ export function Modal({
       </form>
     </dialog>
   );
+
+  return portalHost ? createPortal(modal, portalHost) : modal;
 }
 
 // #region SearchArea
@@ -259,7 +269,7 @@ type MediaDisplayColumnProps = {
 
 export function MediaDisplayColumn({ data, onClick }: MediaDisplayColumnProps) {
   return (
-    <div class="flex flex-row items-start space-x-1 w-max">
+    <div class="flex max-w-full flex-row flex-wrap items-start gap-1">
       {data.map((media) => (
         <div
           key={media.media_key ?? media.id_str}
