@@ -56,6 +56,7 @@
   "Query": "Запрос",
   "Sort": "Сортировка",
   "Include all metadata:": "Включить все метаданные:",
+  "Include original record metadata in bundle:": "Включить исходные метаданные записей в бандл:",
   "Export columns": "Столбцы экспорта",
   "Custom columns": "Пользовательские столбцы",
   "Select all": "Выбрать все",

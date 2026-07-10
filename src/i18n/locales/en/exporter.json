@@ -56,6 +56,7 @@
   "Query": "Query",
   "Sort": "Sort",
   "Include all metadata:": "Include all metadata:",
+  "Include original record metadata in bundle:": "Include original record metadata in bundle:",
   "Export columns": "Export columns",
   "Custom columns": "Custom columns",
   "Select all": "Select all",

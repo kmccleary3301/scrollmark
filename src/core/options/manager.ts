@@ -15,8 +15,10 @@ export interface AppOptions {
   filenamePattern?: string;
   exportColumnMode?: 'all' | 'custom';
   exportColumnFields?: string[];
+  exportColumnSignature?: string;
   exportMetadataMode?: 'none' | 'all' | 'custom';
   exportMetadataFields?: string[];
+  bundleIncludeOriginalMetadata?: boolean;
   language?: string;
   dedicatedDbForAccounts?: boolean;
   safeMode?: boolean;
@@ -42,8 +44,10 @@ export const DEFAULT_APP_OPTIONS: AppOptions = {
   filenamePattern: '{screen_name}_{id}_{type}_{num}_{date}.{ext}',
   exportColumnMode: 'all',
   exportColumnFields: [],
+  exportColumnSignature: '',
   exportMetadataMode: 'none',
   exportMetadataFields: [],
+  bundleIncludeOriginalMetadata: false,
   language: '',
   dedicatedDbForAccounts: false,
   safeMode: false,

@@ -327,6 +327,20 @@ try {
   const bundleExportModal = await openExportModal(page);
   await bundleExportModal.getByText('All current results').click();
   await bundleExportModal.locator('select').nth(1).selectOption('0');
+  const bundleMetadataCheckbox = bundleExportModal.getByRole('checkbox', {
+    name: 'Include original record metadata in bundle:',
+  });
+  const bundleMetadataCheckedByDefault = await bundleMetadataCheckbox.isChecked();
+  await bundleMetadataCheckbox.check();
+  const bundleMetadataStoredAfterOptIn = await page.evaluate(() => {
+    const stored = JSON.parse(window.localStorage.getItem('scrollmark') || '{}');
+    return stored.bundleIncludeOriginalMetadata;
+  });
+  await bundleMetadataCheckbox.uncheck();
+  const bundleMetadataStoredAfterOptOut = await page.evaluate(() => {
+    const stored = JSON.parse(window.localStorage.getItem('scrollmark') || '{}');
+    return stored.bundleIncludeOriginalMetadata;
+  });
   await bundleExportModal.getByRole('button', { name: 'Export Bundle ZIP' }).click();
   const bundleDownload = await waitForDownload(page, 4, '.zip', false);
   await bundleExportModal.getByRole('button', { name: 'Cancel' }).click();
@@ -516,6 +530,18 @@ try {
         exportedRows: Array.isArray(allMinusOneRows) ? allMinusOneRows.length : null,
         exportCompletes: perfSummary.exportCompletes,
         selectionExceptionToggles: perfSummary.selectionExceptionToggles,
+      },
+    },
+    {
+      name: 'bundle original metadata is explicit, off by default, and persisted',
+      ok:
+        bundleMetadataCheckedByDefault === false &&
+        bundleMetadataStoredAfterOptIn === true &&
+        bundleMetadataStoredAfterOptOut === false,
+      details: {
+        bundleMetadataCheckedByDefault,
+        bundleMetadataStoredAfterOptIn,
+        bundleMetadataStoredAfterOptOut,
       },
     },
     {

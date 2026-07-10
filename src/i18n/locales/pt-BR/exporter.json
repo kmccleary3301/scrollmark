@@ -56,6 +56,7 @@
   "Query": "Consulta",
   "Sort": "Ordenação",
   "Include all metadata:": "Incluir todos os metadados:",
+  "Include original record metadata in bundle:": "Incluir metadados do registro original no bundle:",
   "Export columns": "Colunas de exportação",
   "Custom columns": "Colunas personalizadas",
   "Select all": "Selecionar tudo",

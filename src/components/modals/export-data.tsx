@@ -90,7 +90,25 @@ function sanitizeExportColumnFields(
   return normalizeExportColumnFields(fields).filter((field) => available.has(field));
 }
 
+function getExportColumnSignature(availableColumns: ExportColumnOption[]): string {
+  return JSON.stringify(availableColumns.map((column) => column.key).sort());
+}
+
+function hasMatchingExportColumnSignature(availableColumns: ExportColumnOption[]): boolean {
+  return options.get('exportColumnSignature', '') === getExportColumnSignature(availableColumns);
+}
+
+function getInitialExportColumnMode(availableColumns: ExportColumnOption[]): ExportColumnMode {
+  return hasMatchingExportColumnSignature(availableColumns) &&
+    options.get('exportColumnMode') === 'custom'
+    ? 'custom'
+    : 'all';
+}
+
 function getInitialExportColumnFields(availableColumns: ExportColumnOption[]): string[] {
+  if (!hasMatchingExportColumnSignature(availableColumns)) {
+    return availableColumns.map((column) => column.key);
+  }
   const storedFields = normalizeExportColumnFields(options.get('exportColumnFields'));
   const sanitizedFields = sanitizeExportColumnFields(storedFields, availableColumns);
   if (storedFields.length > 0 && sanitizedFields.length === 0) {
@@ -234,7 +252,7 @@ export function ExportDataModal<T>({
 
   const exportColumnOptions = useMemo(() => getExportColumnOptions(columns), [columns]);
   const [columnMode, setColumnMode] = useSignalState<ExportColumnMode>(
-    options.get('exportColumnMode') === 'custom' ? 'custom' : 'all',
+    getInitialExportColumnMode(exportColumnOptions),
   );
   const [columnFields, setColumnFields] = useSignalState<string[]>(
     getInitialExportColumnFields(exportColumnOptions),
@@ -255,6 +273,9 @@ export function ExportDataModal<T>({
   const [totalProgress, setTotalProgress] = useSignalState(0);
   const [exportScope, setExportScope] = useSignalState<ExportScopeType>('result_set');
   const [bundleCompressionLevel, setBundleCompressionLevel] = useSignalState<0 | 1 | 6>(1);
+  const [bundleIncludeOriginalMetadata, setBundleIncludeOriginalMetadata] = useSignalState<boolean>(
+    options.get('bundleIncludeOriginalMetadata', false) === true,
+  );
   const [pinnedResultSetSnapshot, setPinnedResultSetSnapshot] = useState<ResultSetSnapshot | null>(
     null,
   );
@@ -285,6 +306,7 @@ export function ExportDataModal<T>({
     );
     setCurrentProgress(0);
     setTotalProgress(0);
+    setColumnMode(getInitialExportColumnMode(exportColumnOptions));
     setColumnFields(getInitialExportColumnFields(exportColumnOptions));
   }, [
     exportColumnOptions,
@@ -292,6 +314,7 @@ export function ExportDataModal<T>({
     selectedRecords,
     selectionMode,
     setColumnFields,
+    setColumnMode,
     setCurrentProgress,
     setExportScope,
     setTotalProgress,
@@ -343,12 +366,14 @@ export function ExportDataModal<T>({
     }
     setColumnMode(mode);
     options.set('exportColumnMode', mode);
+    options.set('exportColumnSignature', getExportColumnSignature(exportColumnOptions));
   };
 
   const updateColumnFields = (fields: string[]) => {
     const normalized = sanitizeExportColumnFields(fields, exportColumnOptions);
     setColumnFields(normalized);
     options.set('exportColumnFields', normalized);
+    options.set('exportColumnSignature', getExportColumnSignature(exportColumnOptions));
   };
 
   const toggleColumnField = (field: string) => {
@@ -583,10 +608,9 @@ export function ExportDataModal<T>({
           scope: exportScope,
           queryText: pinnedResultSetSnapshot?.queryText,
           sort: pinnedResultSetSnapshot?.sort,
-          // Canonical bundles stay full-fidelity: the export column /
-          // metadata filters only apply to JSON/HTML/CSV exports, not
-          // to shareable/importable bundle ZIPs.
-          includeOriginalMetadata: true,
+          // Column and flat-file metadata filters do not alter the
+          // canonical record shape required for bundle imports.
+          includeOriginalMetadata: bundleIncludeOriginalMetadata,
           compressionLevel: bundleCompressionLevel,
         },
         onProgress: (progress) => {
@@ -873,6 +897,19 @@ export function ExportDataModal<T>({
             <option value="6">{t('Smaller / slower')}</option>
           </select>
         </div>
+        <label class="label cursor-pointer justify-start gap-2 py-0">
+          <input
+            type="checkbox"
+            class="checkbox checkbox-sm"
+            checked={bundleIncludeOriginalMetadata}
+            onChange={(event) => {
+              const checked = (event.currentTarget as HTMLInputElement).checked;
+              setBundleIncludeOriginalMetadata(checked);
+              options.set('bundleIncludeOriginalMetadata', checked);
+            }}
+          />
+          <span>{t('Include original record metadata in bundle:')}</span>
+        </label>
         {activeSourceCount > 0 ? null : (
           <div class="flex items-center justify-center h-28 w-full">
             <p class="text-base-content text-opacity-50">{t('No data selected.')}</p>

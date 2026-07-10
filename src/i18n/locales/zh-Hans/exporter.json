@@ -56,6 +56,7 @@
   "Query": "查询",
   "Sort": "排序",
   "Include all metadata:": "包括所有元数据:",
+  "Include original record metadata in bundle:": "在捆绑包中包含原始记录元数据：",
   "Export columns": "导出列",
   "Custom columns": "自定义列",
   "Select all": "全选",

@@ -56,6 +56,7 @@
   "Query": "クエリ",
   "Sort": "並び順",
   "Include all metadata:": "すべてのメタデータを含める:",
+  "Include original record metadata in bundle:": "元のレコードメタデータをバンドルに含める:",
   "Export columns": "エクスポート列",
   "Custom columns": "カスタム列",
   "Select all": "すべて選択",

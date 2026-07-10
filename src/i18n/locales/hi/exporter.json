@@ -56,6 +56,7 @@
   "Query": "क्वेरी",
   "Sort": "क्रम",
   "Include all metadata:": "सारा मेटाडेटा शामिल करें:",
+  "Include original record metadata in bundle:": "बंडल में मूल रिकॉर्ड मेटाडेटा शामिल करें:",
   "Export columns": "निर्यात कॉलम",
   "Custom columns": "कस्टम कॉलम",
   "Select all": "सभी चुनें",

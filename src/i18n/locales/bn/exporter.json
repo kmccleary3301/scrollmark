@@ -56,6 +56,7 @@
   "Query": "কোয়েরি",
   "Sort": "সাজানো",
   "Include all metadata:": "সব মেটাডেটা অন্তর্ভুক্ত করুন:",
+  "Include original record metadata in bundle:": "বান্ডেলে মূল রেকর্ডের মেটাডেটা অন্তর্ভুক্ত করুন:",
   "Export columns": "এক্সপোর্ট কলাম",
   "Custom columns": "কাস্টম কলাম",
   "Select all": "সব নির্বাচন করুন",

@@ -56,6 +56,7 @@
   "Query": "Query",
   "Sort": "ترتیب",
   "Include all metadata:": "تمام میٹا ڈیٹا شامل کریں:",
+  "Include original record metadata in bundle:": "بنڈل میں اصل ریکارڈ کا میٹا ڈیٹا شامل کریں:",
   "Export columns": "برآمدی کالمز",
   "Custom columns": "حسبِ ضرورت کالمز",
   "Select all": "سب منتخب کریں",
