@@ -13,6 +13,10 @@ export interface AppOptions {
   disabledExtensions?: string[];
   dateTimeFormat?: string;
   filenamePattern?: string;
+  exportColumnMode?: 'all' | 'custom';
+  exportColumnFields?: string[];
+  exportMetadataMode?: 'none' | 'all' | 'custom';
+  exportMetadataFields?: string[];
   language?: string;
   dedicatedDbForAccounts?: boolean;
   safeMode?: boolean;
@@ -36,6 +40,10 @@ export const DEFAULT_APP_OPTIONS: AppOptions = {
   disabledExtensions: ['HomeTimelineModule'],
   dateTimeFormat: 'YYYY-MM-DD HH:mm:ss Z',
   filenamePattern: '{screen_name}_{id}_{type}_{num}_{date}.{ext}',
+  exportColumnMode: 'all',
+  exportColumnFields: [],
+  exportMetadataMode: 'none',
+  exportMetadataFields: [],
   language: '',
   dedicatedDbForAccounts: false,
   safeMode: false,

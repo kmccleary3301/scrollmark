@@ -45,6 +45,7 @@
     "test:media-masonry-app": "node e2e/perf/media_masonry_app_harness.mjs",
     "test:export-memory-app": "node e2e/perf/export_memory_app_harness.mjs",
     "test:export-modal-app": "node e2e/perf/export_modal_app_harness.mjs",
+    "test:export-metadata": "tsx e2e/export_metadata_harness.ts",
     "commitlint": "commitlint --edit",
     "changelog": "git-cliff -o CHANGELOG.md",
     "preview": "vite preview"
