@@ -144,6 +144,10 @@ export interface Tweet {
     created_at: number;
     /** The UNIX timestamp in ms when inserted or updated to local database. */
     updated_at: number;
+    /** Canonical Markdown extracted from an X Article payload or rendered article DOM. */
+    article_markdown?: string;
+    /** Converter revision used to produce article_markdown. */
+    article_markdown_version?: number;
     /** The number of media items in the tweet. */
     media_count: number;
     /** The UNIX timestamp in ms when the data record was migrated from legacy format. */
@@ -180,6 +184,7 @@ export interface TweetArticleResult {
   rest_id?: string;
   title?: string;
   preview_text?: string;
+  plain_text?: string;
   metadata?: {
     first_published_at_secs?: number;
   };
@@ -187,22 +192,38 @@ export interface TweetArticleResult {
     id?: string;
     media_id?: string;
     media_key?: string;
+    alt_text?: string;
+    ext_alt_text?: string;
     media_info?: {
-      __typename?: 'ApiImage';
+      __typename?: 'ApiImage' | 'ApiVideo';
       original_img_url?: string;
       original_img_width?: number;
       original_img_height?: number;
+      variants?: Array<{
+        bit_rate?: number;
+        bitrate?: number;
+        content_type?: string;
+        url?: string;
+      }>;
     };
   };
   media_entities?: Array<{
     id?: string;
     media_id?: string;
     media_key?: string;
+    alt_text?: string;
+    ext_alt_text?: string;
     media_info?: {
-      __typename?: 'ApiImage';
+      __typename?: 'ApiImage' | 'ApiVideo';
       original_img_url?: string;
       original_img_width?: number;
       original_img_height?: number;
+      variants?: Array<{
+        bit_rate?: number;
+        bitrate?: number;
+        content_type?: string;
+        url?: string;
+      }>;
     };
   }>;
   content_state?: {
@@ -213,7 +234,14 @@ export interface TweetArticleResult {
       data?: unknown;
       entityRanges?: unknown[];
       inlineStyleRanges?: unknown[];
+      depth?: number;
     }>;
+    entityMap?:
+      | Record<string, unknown>
+      | Array<{
+          key?: string | number;
+          value?: unknown;
+        }>;
   };
 }
 

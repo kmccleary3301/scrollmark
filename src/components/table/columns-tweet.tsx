@@ -22,6 +22,7 @@ import {
 import { MediaDisplayColumn } from '../common';
 
 const columnHelper = createColumnHelper<Tweet>();
+const TABLE_CONTENT_PREVIEW_LENGTH = 1200;
 type DerivedTweetTableData = {
   createdAtMs: number;
   fullText: string;
@@ -172,31 +173,42 @@ export const columns = [
       exportValue: (row) => getDerivedTweetTableData(row.original).fullText,
     },
     header: () => <Trans i18nKey="Content" />,
-    cell: (info) => (
-      <div>
-        <p
-          class="w-60 whitespace-pre-wrap"
-          dangerouslySetInnerHTML={{
-            __html: strEntitiesToHTML(getDerivedTweetTableData(info.row.original).fullText, [
-              ...(info.row.original.legacy?.entities?.urls ?? []),
-              ...(info.row.original.legacy?.entities?.media ?? []),
-            ]),
-          }}
-        />
-        {info.row.original.note_tweet && (
-          <button
-            class="link"
-            onClick={() =>
-              info.table.options.meta?.setRawDataPreview(
-                getDerivedTweetTableData(info.row.original).fullText as unknown as Tweet,
-              )
-            }
-          >
-            {'>>'} <Trans i18nKey="Show Full Text" />
-          </button>
-        )}
-      </div>
-    ),
+    cell: (info) => {
+      const fullText = getDerivedTweetTableData(info.row.original).fullText;
+      const showPreview =
+        !!info.row.original.article ||
+        !!info.row.original.note_tweet ||
+        fullText.length > TABLE_CONTENT_PREVIEW_LENGTH;
+      const previewText = showPreview
+        ? `${fullText.slice(0, TABLE_CONTENT_PREVIEW_LENGTH).trimEnd()}${
+            fullText.length > TABLE_CONTENT_PREVIEW_LENGTH ? '\n...' : ''
+          }`
+        : fullText;
+
+      return (
+        <div>
+          <p
+            class="w-60 whitespace-pre-wrap break-words"
+            dangerouslySetInnerHTML={{
+              __html: strEntitiesToHTML(previewText, [
+                ...(info.row.original.legacy?.entities?.urls ?? []),
+                ...(info.row.original.legacy?.entities?.media ?? []),
+              ]),
+            }}
+          />
+          {showPreview && (
+            <button
+              class="link"
+              onClick={() =>
+                info.table.options.meta?.setRawDataPreview(fullText as unknown as Tweet)
+              }
+            >
+              {'>>'} <Trans i18nKey="Show Full Text" />
+            </button>
+          )}
+        </div>
+      );
+    },
   }),
   columnHelper.accessor((row) => getDerivedTweetTableData(row).media.length, {
     id: 'media',

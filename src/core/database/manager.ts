@@ -10,13 +10,22 @@ import {
   projectImportedSnapshot,
 } from '@/core/bundles';
 import { Capture, SocialEdge, Tweet, User } from '@/types';
-import { extractTweetCreatedAtMs, extractTweetMedia } from '@/utils/api';
+import {
+  extractQuotedTweet,
+  extractTweetCreatedAtMs,
+  extractTweetFullText,
+  extractTweetMedia,
+} from '@/utils/api';
 import { parseTwitterDateTime } from '@/utils/common';
 import { migration_20250609 } from '@/utils/migration';
 import { enrichUsersWithRelationshipFields } from '@/utils/social-edges';
 import { nowMs, recordPerfMetric } from '@/core/perf/metrics';
 import logger from '@/utils/logger';
 import { getUnsafeWindow } from '@/utils/unsafe-window';
+import {
+  extractTwitterArticleMarkdown,
+  TWITTER_ARTICLE_MARKDOWN_VERSION,
+} from '@/utils/twitter-article-markdown';
 import { ExtensionType } from '../extensions/extension';
 import { options } from '../options';
 import { emitDatabaseMutation } from './mutation';
@@ -36,6 +45,7 @@ const ACTIVE_DB_NAME_KEY = '__twe_active_db_name_v1';
 const CAPTURE_INDEX_REVISION_KEY = '__twe_capture_index_revisions_v1';
 const FOLDER_SOURCE_INDEX_REVISION_KEY = '__twe_folder_source_index_revisions_v1';
 const CAPTURE_COUNT_EVENT_NAME = 'twe:capture-count-updated-v1';
+const ARTICLE_MARKDOWN_BACKFILL_KEY_PREFIX = 'twe_article_markdown_backfill_v1';
 const DB_WRITE_CHUNK_SIZE = 500;
 const CAPTURE_INDEX_PAGE_SIZE = 256;
 const FOLDER_SOURCE_INDEX_PAGE_SIZE = 256;
@@ -189,6 +199,10 @@ function asSearchText(value: unknown): string {
   return '';
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function entityTypeFromExtensionType(type?: ExtensionType): ResultEntityType | '' {
   if (type === ExtensionType.USER) return 'user';
   if (type === ExtensionType.TWEET) return 'tweet';
@@ -238,6 +252,29 @@ function mergeTweetMetadata(existing: unknown, incoming: Tweet): Tweet {
 
   const merged = { ...incoming } as unknown as Record<string, unknown>;
   const existingObj = existing as unknown as Record<string, unknown>;
+  const existingTweet = existing as Tweet;
+
+  merged.twe_private_fields = {
+    ...(isObjectRecord(existingObj.twe_private_fields) ? existingObj.twe_private_fields : {}),
+    ...(isObjectRecord(incoming.twe_private_fields) ? incoming.twe_private_fields : {}),
+  };
+
+  const existingArticleMarkdown = extractTweetFullText(existingTweet);
+  const incomingArticleMarkdown = extractTweetFullText(incoming);
+  const existingHasArticle = !!existingTweet.article;
+  const incomingHasArticle = !!incoming.article;
+  if (
+    existingHasArticle &&
+    (!incomingHasArticle || existingArticleMarkdown.length > incomingArticleMarkdown.length)
+  ) {
+    merged.article = existingTweet.article;
+    if (existingTweet.twe_private_fields?.article_markdown) {
+      (merged.twe_private_fields as Record<string, unknown>).article_markdown =
+        existingTweet.twe_private_fields.article_markdown;
+      (merged.twe_private_fields as Record<string, unknown>).article_markdown_version =
+        existingTweet.twe_private_fields.article_markdown_version;
+    }
+  }
 
   for (const field of BOOKMARK_CONTEXT_FIELDS) {
     const existingValue = existingObj[field];
@@ -2244,17 +2281,18 @@ export class DatabaseManager {
         data_key: tweet.rest_id,
         created_at: now,
       }));
-      const documents = this.buildTweetSearchDocuments(extName, normalizedTweets);
-
       await this.db.transaction(
         'rw',
         this.tweets(),
         this.captures(),
         this.searchDocuments(),
         async () => {
-          await this.putMergedTweets(normalizedTweets);
+          const mergedTweets = await this.putMergedTweets(normalizedTweets);
           await this.bulkPutInChunks(this.captures(), captures);
-          await this.bulkPutInChunks(this.searchDocuments(), documents);
+          await this.bulkPutInChunks(
+            this.searchDocuments(),
+            this.buildTweetSearchDocuments(extName, mergedTweets),
+          );
         },
       );
       await this.invalidateCaptureIndexPages(extName, ExtensionType.TWEET);
@@ -2989,22 +3027,13 @@ export class DatabaseManager {
       const obj = tweet as unknown as Record<string, unknown>;
       const id = String(tweet.rest_id || readPath(obj, 'legacy.id_str') || '').trim();
       if (!id) continue;
-      const articleTitle = asSearchText(readPath(obj, 'article.article_results.result.title'));
-      const articlePreview = asSearchText(
-        readPath(obj, 'article.article_results.result.preview_text'),
-      );
       const fullText = uniqText([
-        asSearchText(readPath(obj, 'note_tweet.note_tweet_results.result.text')),
-        articleTitle,
-        articlePreview,
-        asSearchText(readPath(obj, 'legacy.full_text')),
+        extractTweetFullText(tweet),
         asSearchText(readPath(obj, 'legacy.text')),
       ]);
+      const quotedTweet = extractQuotedTweet(tweet);
       const quotedText = uniqText([
-        asSearchText(
-          readPath(obj, 'quoted_status_result.result.note_tweet.note_tweet_results.result.text'),
-        ),
-        asSearchText(readPath(obj, 'quoted_status_result.result.legacy.full_text')),
+        quotedTweet ? extractTweetFullText(quotedTweet) : '',
         asSearchText(readPath(obj, 'quoted_status_result.result.legacy.text')),
       ]);
       const authorScreenName = asSearchText(
@@ -3273,9 +3302,99 @@ export class DatabaseManager {
     return { processed, documents };
   }
 
+  private async backfillArticleMarkdownOnce(): Promise<void> {
+    const storageKey = `${ARTICLE_MARKDOWN_BACKFILL_KEY_PREFIX}:${this.db.name}`;
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem(storageKey) === '1') {
+        return;
+      }
+    } catch {
+      // Continue without a persistent completion marker.
+    }
+
+    await this.enqueueWrite('backfillArticleMarkdownOnce', async () => {
+      const articleTweets = await this.tweets()
+        .filter((tweet) => !!tweet.article)
+        .toArray();
+      let updatedTweets = 0;
+      let updatedDocuments = 0;
+
+      for (const chunk of chunkArray(articleTweets, DB_WRITE_CHUNK_SIZE)) {
+        const enrichedTweets: Tweet[] = [];
+        for (const tweet of chunk) {
+          const article = tweet.article?.article_results?.result ?? null;
+          const articleMarkdown = extractTwitterArticleMarkdown(article);
+          if (!articleMarkdown) continue;
+          enrichedTweets.push({
+            ...tweet,
+            twe_private_fields: {
+              ...tweet.twe_private_fields,
+              article_markdown: articleMarkdown,
+              article_markdown_version: TWITTER_ARTICLE_MARKDOWN_VERSION,
+            },
+          });
+        }
+        if (!enrichedTweets.length) continue;
+
+        const tweetById = new Map(enrichedTweets.map((tweet) => [tweet.rest_id, tweet]));
+        const entityKeys = enrichedTweets.map(
+          (tweet) => ['tweet', tweet.rest_id] as ['tweet', string],
+        );
+        const existingDocuments = await this.searchDocuments()
+          .where('[entity_type+entity_id]')
+          .anyOf(entityKeys)
+          .toArray();
+        const rebuiltDocuments: SearchDocumentRow[] = [];
+        for (const document of existingDocuments) {
+          if (
+            document.source_kind !== 'live' ||
+            document.raw_ref_table !== 'tweets' ||
+            !document.extension_name
+          ) {
+            continue;
+          }
+          const tweet = tweetById.get(document.entity_id);
+          if (!tweet) continue;
+          const rebuilt = this.buildTweetSearchDocuments(document.extension_name, [tweet])[0];
+          if (!rebuilt) continue;
+          rebuiltDocuments.push({
+            ...rebuilt,
+            id: document.id,
+            source_key: document.source_key,
+            observed_at_ms: document.observed_at_ms,
+          });
+        }
+
+        await this.db.transaction('rw', this.tweets(), this.searchDocuments(), async () => {
+          await this.bulkPutInChunks(this.tweets(), enrichedTweets);
+          await this.bulkPutInChunks(this.searchDocuments(), rebuiltDocuments);
+        });
+        updatedTweets += enrichedTweets.length;
+        updatedDocuments += rebuiltDocuments.length;
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+      }
+
+      recordPerfMetric({
+        kind: 'db',
+        name: 'article-markdown-backfill',
+        value: updatedTweets,
+        tags: { updatedDocuments },
+      });
+      if (updatedDocuments > 0) {
+        emitDatabaseMutation({ operation: 'articleMarkdownBackfill', count: updatedDocuments });
+      }
+    });
+
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(storageKey, '1');
+    } catch {
+      // ignore storage write failures
+    }
+  }
+
   private async putMergedTweets(tweets: Tweet[]) {
     if (!tweets.length) {
-      return;
+      return [];
     }
 
     const ids = this.normalizeDataKeys(tweets.map((tweet) => tweet.rest_id));
@@ -3289,6 +3408,7 @@ export class DatabaseManager {
       const normalized = {
         ...tweet,
         twe_private_fields: {
+          ...tweet.twe_private_fields,
           created_at: extractTweetCreatedAtMs(tweet),
           updated_at: Date.now(),
           media_count: extractTweetMedia(tweet).length,
@@ -3299,6 +3419,7 @@ export class DatabaseManager {
     });
 
     await this.bulkPutInChunks(this.tweets(), data);
+    return data;
   }
 
   private async putUsers(users: User[]) {
@@ -3707,6 +3828,9 @@ export class DatabaseManager {
 
       await this.db.open();
       logger.info(`Database connected: ${this.db.name}`);
+      void this.backfillArticleMarkdownOnce().catch((error) => {
+        logger.warn('Article Markdown backfill failed', error);
+      });
     } catch (error) {
       this.logError(error);
     }

@@ -19,6 +19,10 @@ import {
 } from '@/types';
 import logger from './logger';
 import { parseTwitterDateTime } from './common';
+import {
+  extractTwitterArticleMarkdown,
+  TWITTER_ARTICLE_MARKDOWN_VERSION,
+} from './twitter-article-markdown';
 
 /**
  * A generic function to extract data from the API response.
@@ -330,19 +334,6 @@ export function extractTweetArticle(tweet: Tweet): TweetArticleResult | null {
   return article && typeof article === 'object' ? article : null;
 }
 
-function extractArticleBlockText(article: TweetArticleResult | null): string[] {
-  const blocks = article?.content_state?.blocks;
-  if (!Array.isArray(blocks)) return [];
-
-  const parts: string[] = [];
-  for (const block of blocks) {
-    const text = typeof block?.text === 'string' ? block.text.trim() : '';
-    if (!text) continue;
-    parts.push(text);
-  }
-  return parts;
-}
-
 function normalizeSyntheticImageUrl(url: string): string {
   const value = String(url || '').trim();
   if (!value) return '';
@@ -570,6 +561,15 @@ export function extractTweetMediaTags(tweet: Tweet): Tag[] {
 }
 
 export function extractTweetFullText(tweet: Tweet): string {
+  const article = extractTweetArticle(tweet);
+  const storedArticleMarkdown = tweet.twe_private_fields?.article_markdown;
+  const articleMarkdown =
+    (storedArticleMarkdown && storedArticleMarkdown.trim()) ||
+    extractTwitterArticleMarkdown(article);
+  if (articleMarkdown) {
+    return articleMarkdown;
+  }
+
   const noteTweetText = tweet.note_tweet?.note_tweet_results.result.text;
   if (noteTweetText && noteTweetText.trim()) {
     return noteTweetText;
@@ -580,12 +580,7 @@ export function extractTweetFullText(tweet: Tweet): string {
     return legacyText;
   }
 
-  const article = extractTweetArticle(tweet);
-  const parts = [article?.title, article?.preview_text, ...extractArticleBlockText(article)]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean);
-  const deduped = parts.filter((value, index) => parts.indexOf(value) === index);
-  return deduped.join('\n\n');
+  return '';
 }
 
 export function filterEmptyTweet(tweet: Tweet): Tweet | null {
@@ -638,6 +633,15 @@ export function filterEmptyTweet(tweet: Tweet): Tweet | null {
       retweeted: false,
       user_id_str: userRestId,
       id_str: tweet.rest_id,
+    };
+  }
+
+  const articleMarkdown = extractTwitterArticleMarkdown(extractTweetArticle(tweet));
+  if (articleMarkdown) {
+    tweet.twe_private_fields = {
+      ...tweet.twe_private_fields,
+      article_markdown: articleMarkdown,
+      article_markdown_version: TWITTER_ARTICLE_MARKDOWN_VERSION,
     };
   }
 

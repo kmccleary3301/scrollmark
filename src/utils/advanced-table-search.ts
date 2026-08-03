@@ -1,4 +1,6 @@
 import { parseTwitterDateTime } from '@/utils/common';
+import { extractTwitterArticleMarkdown } from '@/utils/twitter-article-markdown';
+import type { TweetArticleResult } from '@/types';
 import { SEARCH_FUZZY, SEARCH_PREFIX } from '@/contracts/search-contract';
 import {
   ParsedSearchQuery,
@@ -592,6 +594,10 @@ function extractSearchDoc<T>(record: T): SearchDoc<T> {
     `${Math.random().toString(36).slice(2)}`;
 
   const fullText =
+    asString(readPath(obj, 'twe_private_fields.article_markdown')) ||
+    extractTwitterArticleMarkdown(
+      (readPath(obj, 'article.article_results.result') as TweetArticleResult | undefined) ?? null,
+    ) ||
     asString(readPath(obj, 'note_tweet.note_tweet_results.result.text')) ||
     [
       asString(readPath(obj, 'article.article_results.result.title')),
@@ -606,6 +612,12 @@ function extractSearchDoc<T>(record: T): SearchDoc<T> {
     asString(readPath(obj, 'legacy.text')) ||
     asString(readPath(obj, 'legacy.description'));
   const quotedText =
+    asString(readPath(obj, 'quoted_status_result.result.twe_private_fields.article_markdown')) ||
+    extractTwitterArticleMarkdown(
+      (readPath(obj, 'quoted_status_result.result.article.article_results.result') as
+        | TweetArticleResult
+        | undefined) ?? null,
+    ) ||
     asString(
       readPath(obj, 'quoted_status_result.result.note_tweet.note_tweet_results.result.text'),
     ) ||

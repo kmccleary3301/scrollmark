@@ -1,7 +1,7 @@
 {
   "name": "scrollmark",
   "description": "Scrollmark: local-first X/Twitter research archive, search, and portable bundle export.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "Kyle McCleary",
   "license": "MIT",
   "homepage": "https://github.com/kmccleary3301/scrollmark",
@@ -46,6 +46,8 @@
     "test:export-memory-app": "node e2e/perf/export_memory_app_harness.mjs",
     "test:export-modal-app": "node e2e/perf/export_modal_app_harness.mjs",
     "test:export-metadata": "tsx e2e/export_metadata_harness.ts",
+    "test:twitter-article-markdown": "tsx e2e/twitter_article_markdown_harness.ts",
+    "test:twitter-article-dom": "node e2e/twitter_article_dom_harness.mjs",
     "commitlint": "commitlint --edit",
     "changelog": "git-cliff -o CHANGELOG.md",
     "preview": "vite preview"

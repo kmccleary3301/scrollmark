@@ -1,4 +1,8 @@
 import { Media, Tweet, User } from '@/types';
+import {
+  extractTwitterArticleMarkdownFromElement,
+  TWITTER_ARTICLE_MARKDOWN_VERSION,
+} from '@/utils/twitter-article-markdown';
 
 function isVisibleElement(node: Element | null): node is HTMLElement {
   if (!(node instanceof HTMLElement)) return false;
@@ -199,7 +203,8 @@ export function buildSyntheticTweetFromDomSnapshot(input: {
 
   const screenName = extractScreenName(article, tweetId);
   const displayName = extractDisplayName(article, screenName);
-  const fullText = extractTweetText(article);
+  const articleMarkdown = extractTwitterArticleMarkdownFromElement(article);
+  const fullText = articleMarkdown || extractTweetText(article);
   const createdAtIso =
     (article.querySelector('time') as HTMLTimeElement | null)?.getAttribute('datetime') || null;
   const createdAt = toUtcStringFromDatetime(createdAtIso);
@@ -261,6 +266,12 @@ export function buildSyntheticTweetFromDomSnapshot(input: {
       created_at: Date.parse(createdAt) || Date.now(),
       updated_at: Date.now(),
       media_count: media.length,
+      ...(articleMarkdown
+        ? {
+            article_markdown: articleMarkdown,
+            article_markdown_version: TWITTER_ARTICLE_MARKDOWN_VERSION,
+          }
+        : {}),
     },
     ...(folderId
       ? {

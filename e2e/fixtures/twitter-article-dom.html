@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Scrollmark X Article DOM fixture</title>
+  </head>
+  <body>
+    <article data-tweet-id="2082921705941651595">
+      <div class="tweet-author">Fixture Author</div>
+      <div class="article-shell">
+        <div class="article-body">
+          <img alt="Article cover image" src="https://pbs.twimg.com/media/cover.jpg" />
+          <h1>DOM Article Fixture</h1>
+          <div>
+            <p>
+              A <strong>bold</strong>, <em>careful</em>
+              <a href="https://example.com/article-reference">reference</a> with
+              <code>inline()</code> code.
+            </p>
+            <h2>Structured DOM</h2>
+            <ul>
+              <li>
+                first bullet
+                <ul>
+                  <li>nested bullet</li>
+                </ul>
+              </li>
+            </ul>
+            <div class="x-article-code">
+              <div><span>python</span><button aria-label="Copy code">Copy</button></div>
+              <pre>def dom_kernel():
+    return 7</pre>
+            </div>
+            <table>
+              <tbody>
+                <tr><th>Feature</th><th>Value</th></tr>
+                <tr><td>table</td><td><code>preserved</code></td></tr>
+              </tbody>
+            </table>
+            <p>
+              Inline math:
+              <span class="katex">
+                <math>
+                  <semantics>
+                    <mrow><mi>x</mi><msup><mn>2</mn></msup></mrow>
+                    <annotation encoding="application/x-tex">x^2 + y^2</annotation>
+                  </semantics>
+                </math>
+              </span>
+            </p>
+            <div class="katex-display">
+              <math display="block">
+                <semantics>
+                  <mrow><mo>integral</mo></mrow>
+                  <annotation encoding="application/x-tex">\int_0^1 x^2\,dx</annotation>
+                </semantics>
+              </math>
+            </div>
+            <blockquote>DOM quote survives.</blockquote>
+            <hr />
+            <img alt="Article diagram" src="https://pbs.twimg.com/media/diagram.jpg" />
+          </div>
+        </div>
+      </div>
+      <div class="tweet-actions">Like Repost Bookmark UI must not be included</div>
+    </article>
+
+    <script type="module">
+      import { extractTwitterArticleMarkdownFromElement } from '/src/utils/twitter-article-markdown.ts';
+
+      const article = document.querySelector('article[data-tweet-id]');
+      window.__twitterArticleMarkdown = article
+        ? extractTwitterArticleMarkdownFromElement(article)
+        : '';
+    </script>
+  </body>
+</html>
