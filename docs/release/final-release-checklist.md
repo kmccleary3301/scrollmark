@@ -43,7 +43,7 @@
 - [x] Browser 40k/80k and companion 57,500-item scale gates pass without truncation or hidden fallback.
 - [x] `npm run release:durability` rebuilds current artifacts, recreates G1–G8 evidence, validates semantic gates and schemas, and scores 100/100.
 
-Latest verified durability source revision: `working-tree-sha256:bef0e5e01e1ee05ebf4af4c753fab100a3824d5e73309ec7e820c63fddecbfc3`.
+Latest verified durability source revision: `working-tree-sha256:6ee330c222a8335bbb0609e891e4aace80bb6273042d9c379527345e87e8bf2f`.
 
 ## DB-Backed Table Rewrite Gates
 
