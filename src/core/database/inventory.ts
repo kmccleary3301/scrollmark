@@ -22,6 +22,7 @@ export type IndexedDbInventoryRow = {
 
 export type IndexedDbInventory = {
   active_db_name: string | null;
+  enumeration_supported: boolean;
   databases: IndexedDbInventoryRow[];
 };
 
@@ -64,8 +65,12 @@ export function readActiveDatabaseName(): string | null {
   return null;
 }
 
+export function isIndexedDbEnumerationSupported(): boolean {
+  return typeof indexedDB !== 'undefined' && typeof indexedDB.databases === 'function';
+}
+
 export async function listKnownIndexedDbNames(): Promise<string[]> {
-  if (typeof indexedDB === 'undefined' || typeof indexedDB.databases !== 'function') {
+  if (!isIndexedDbEnumerationSupported()) {
     return [];
   }
 
@@ -186,18 +191,38 @@ async function readDatabaseInventory(
 
 export async function collectIndexedDbInventory(): Promise<IndexedDbInventory> {
   const activeDbName = readActiveDatabaseName();
+  const enumerationSupported = isIndexedDbEnumerationSupported();
   const names = await listKnownIndexedDbNames();
-  if (activeDbName && isKnownDatabaseName(activeDbName) && !names.includes(activeDbName)) {
-    names.push(activeDbName);
-    names.sort();
+  const activeDbMissing =
+    enumerationSupported &&
+    !!activeDbName &&
+    isKnownDatabaseName(activeDbName) &&
+    !names.includes(activeDbName);
+
+  if (typeof indexedDB === 'undefined' || !enumerationSupported) {
+    return {
+      active_db_name: activeDbName,
+      enumeration_supported: false,
+      databases: [],
+    };
   }
 
-  if (typeof indexedDB === 'undefined') {
-    return { active_db_name: activeDbName, databases: [] };
+  const databases = await Promise.all(
+    names.map((name) => readDatabaseInventory(name, activeDbName)),
+  );
+  if (activeDbMissing && activeDbName) {
+    databases.push({
+      name: activeDbName,
+      active: true,
+      tables: {},
+      error: 'active database missing',
+    });
   }
+  databases.sort((left, right) => left.name.localeCompare(right.name));
 
   return {
     active_db_name: activeDbName,
-    databases: await Promise.all(names.map((name) => readDatabaseInventory(name, activeDbName))),
+    enumeration_supported: true,
+    databases,
   };
 }

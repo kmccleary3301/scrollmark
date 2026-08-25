@@ -23,6 +23,11 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install dependencies
         run: npm ci
 
@@ -34,6 +39,16 @@ jobs:
 
       - name: Validate userscript metadata
         run: npm run check:metadata
+
+      - name: Validate canonical archive durability
+        run: |
+          npm run test:neutral-contracts
+          python3 -m scrollmark_companion.harness
+          npm run test:durability-coordinator
+          npm run test:generation-rebuild
+          npm run test:companion-bundle-bridge
+          npm run test:snapshot-recovery-browser
+          npm run test:reconciliation-manifest
 
       - name: Upload userscript artifacts
         uses: actions/upload-artifact@v4

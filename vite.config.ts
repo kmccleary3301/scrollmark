@@ -68,7 +68,7 @@ export default defineConfig({
         namespace: 'https://github.com/kmccleary3301/scrollmark',
         icon: twitterIconPng,
         match: ['*://twitter.com/*', '*://x.com/*', '*://mobile.x.com/*'],
-        grant: ['unsafeWindow', 'GM_xmlhttpRequest'],
+        grant: ['unsafeWindow', 'GM_xmlhttpRequest', 'GM_getValue', 'GM_setValue'],
         connect: ['cdn.syndication.twimg.com'],
         'run-at': 'document-start',
         // NOTE: X.com currently enforces a strict CSP that can block page-context injection

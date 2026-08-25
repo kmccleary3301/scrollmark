@@ -65,9 +65,9 @@
 
 ## What Scrollmark does
 
-Scrollmark runs as a userscript on `x.com`, `twitter.com`, and `mobile.x.com`. It observes the same GraphQL/API responses that the X web app loads while you browse, parses useful structures out of those responses, stores them locally in IndexedDB, and gives you a fast explorer for search, review, export, and sharing.
+Scrollmark runs as a userscript on `x.com`, `twitter.com`, and `mobile.x.com`. It observes the same GraphQL/API responses that the X web app loads while you browse, parses useful structures, and gives you a fast explorer for search, review, export, and sharing. IndexedDB is the disposable browser projection; when the local companion is paired, acknowledged normalized mutations are held in a canonical SQLite archive outside the browser profile and can reconstruct that projection.
 
-It is intentionally not a cloud product, not a bot, and not a Twitter/X developer API client. The core idea is simple: if the web app loads useful research material into your browser, Scrollmark can help you preserve and query it locally.
+It is intentionally not a cloud product, not a bot, and not a Twitter/X developer API client. The core idea is simple: if the web app loads useful research material into your browser, Scrollmark can preserve and query it locally without making browser site data the only durable copy.
 
 | Area          | What it gives you                                                                                                                                                                      | Why it matters                                                                                           |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -200,6 +200,22 @@ By Kyle McCleary
 <p align="center">
   <img src="docs/screenshots/install-violentmonkey-extension-menu.png" alt="Scrollmark enabled in Violentmonkey" width="420" />
 </p>
+
+### Local durability companion on macOS
+
+The repository includes the authenticated loopback companion and its per-user LaunchAgent installer. From the repository root:
+
+```bash
+python3 -m scrollmark_companion.launchagent install --load
+```
+
+The installer creates an owner-only state directory, an owner-controlled `0600` pairing token, the canonical SQLite archive, verified snapshot storage, and a per-user LaunchAgent. It admits only `x.com`, `twitter.com`, and `mobile.x.com` origins and binds the service to `127.0.0.1`.
+
+Uninstalling the service preserves the canonical archive, snapshots, and pairing state:
+
+```bash
+python3 -m scrollmark_companion.launchagent uninstall
+```
 
 ### Chrome note
 
@@ -354,15 +370,16 @@ For very large binary media exports, browser memory limits still matter. Canonic
 
 Scrollmark is designed around local control.
 
-| Principle           | Implementation                                                                            |
-| ------------------- | ----------------------------------------------------------------------------------------- |
-| Local-first storage | Captured records are stored in browser IndexedDB.                                         |
-| No hosted backend   | There is no Scrollmark cloud service.                                                     |
-| No X developer app  | The script observes the web app instead of using official API credentials.                |
-| Explicit exports    | Data leaves your machine only when you export and share files yourself.                   |
-| Isolated imports    | Bundle Library imports are separate from live capture tables.                             |
-| Safe text rendering | Imported/captured text is escaped; sanitized `http`/`https` entity links are regenerated. |
-| ZIP hardening       | Bundle import rejects absolute/parent traversal paths and enforces decompression limits.  |
+| Principle                   | Implementation                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Local-first storage         | IndexedDB is a disposable browser projection; the paired canonical archive is local SQLite outside the profile. |
+| Authenticated local service | The companion binds to loopback, exact X origins, a custom protocol header, and a per-install bearer token.     |
+| No hosted backend           | There is no Scrollmark cloud service.                                                                           |
+| No X developer app          | The script observes the web app instead of using official API credentials.                                      |
+| Explicit exports            | Data leaves your machine only when you export and share files yourself.                                         |
+| Isolated imports/namespaces | Bundle imports stay separate from live captures; canonical account namespaces cannot cross.                     |
+| Verified recovery           | Hash-verified snapshots restore canonical state before rebuilding a staged browser generation.                  |
+| Safe text and ZIP handling  | Text is escaped, URLs are constrained, and bundle imports enforce traversal/decompression limits.               |
 
 Userscript permissions are intentionally narrow for this architecture:
 
@@ -400,6 +417,9 @@ scrollmark/
 ├─ README.md
 ├─ package.json
 ├─ vite.config.ts
+├─ contracts/
+│  └─ scrollmark/v1/           # Neutral protocol, evidence, migration, and release schemas
+├─ scrollmark_companion/       # Authenticated SQLite archive, snapshots, LaunchAgent, and proof harnesses
 ├─ docs/
 │  ├─ bundles/
 │  │  └─ canonical-bundle-v1.md
@@ -467,17 +487,23 @@ scrollmark/
 
 ### Prerequisites
 
-| Tool                 | Use                                                  |
-| -------------------- | ---------------------------------------------------- |
-| Node.js              | Runtime for Vite, TypeScript, ESLint, and harnesses. |
-| npm                  | Package install and scripts.                         |
-| Playwright browsers  | Browser-driven perf/QC harnesses.                    |
-| A userscript manager | Manual install/QC in Firefox or Chrome.              |
+| Tool                 | Use                                                                          |
+| -------------------- | ---------------------------------------------------------------------------- |
+| Node.js              | Runtime for Vite, TypeScript, ESLint, and harnesses.                         |
+| npm                  | Package install and scripts.                                                 |
+| Playwright browsers  | Browser-driven perf/QC harnesses.                                            |
+| A userscript manager | Manual install/QC in Firefox or Chrome.                                      |
+| Python 3             | Companion runtime, neutral contracts, recovery drills, and release evidence. |
+| macOS                | Required only for the real LaunchAgent and Keychain operational gate.        |
 
 Install dependencies:
 
 ```bash
 npm install
+```
+
+```bash
+python3 -m pip install -r requirements-dev.txt
 ```
 
 Install Playwright browsers when running browser harnesses:
@@ -488,15 +514,16 @@ npx playwright install chromium firefox
 
 ### Common commands
 
-| Command                                       | Purpose                                            |
-| --------------------------------------------- | -------------------------------------------------- |
-| `npm run lint`                                | ESLint gate.                                       |
-| `npm run build`                               | TypeScript check plus production userscript build. |
-| `npm run build:e2e`                           | Firefox/local e2e userscript build.                |
-| `TWE_BUILD_VARIANT=chrome-e2e npx vite build` | Chrome/local e2e userscript build.                 |
-| `npm run dev`                                 | Vite development server.                           |
-| `npm run preview`                             | Preview built output.                              |
-| `npm run changelog`                           | Generate changelog with `git-cliff`.               |
+| Command                                       | Purpose                                                       |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| `npm run lint`                                | ESLint gate.                                                  |
+| `npm run build`                               | TypeScript check plus production userscript build.            |
+| `npm run build:e2e`                           | Firefox/local e2e userscript build.                           |
+| `TWE_BUILD_VARIANT=chrome-e2e npx vite build` | Chrome/local e2e userscript build.                            |
+| `npm run dev`                                 | Vite development server.                                      |
+| `npm run preview`                             | Preview built output.                                         |
+| `npm run changelog`                           | Generate changelog with `git-cliff`.                          |
+| `npm run release:durability`                  | Rebuild and verify current G1–G8 durability release evidence. |
 
 ### Build outputs
 
@@ -518,6 +545,7 @@ npm run build
 npm run build:e2e
 TWE_BUILD_VARIANT=chrome-e2e npx vite build
 ./e2e/perf/run_final_hill_perf_suite.sh
+npm run release:durability
 ```
 
 | Gate                   | What it protects                                                                               |
@@ -557,7 +585,7 @@ No. Scrollmark observes responses loaded by the X web app while you browse. It d
 <details>
 <summary><strong>Does Scrollmark send my archive to a server?</strong></summary>
 
-No. Captures are stored locally in browser IndexedDB. Data leaves your machine only when you explicitly export a file and share it yourself.
+No. The browser projection and optional canonical companion archive remain on your machine. The companion is an authenticated loopback service, not a hosted backend. Data leaves your machine only when you explicitly export and share a file.
 
 </details>
 

@@ -122,5 +122,8 @@
   "rows scanned:": "rows scanned:",
   "media URLs:": "media URLs:",
   "loading": "loading",
-  "Loading media...": "Loading media..."
+  "Loading media...": "Loading media...",
+  "Export the paired canonical namespace as a verified shared-safe bundle.": "Export the paired canonical namespace as a verified shared-safe bundle.",
+  "Pair a local companion to export its canonical namespace.": "Pair a local companion to export its canonical namespace.",
+  "Export Companion Namespace": "Export Companion Namespace"
 }

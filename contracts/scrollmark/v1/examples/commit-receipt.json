@@ -1,0 +1,32 @@
+{
+  "protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "request_id": "req-demo-1",
+  "archive_id": "archive-demo",
+  "namespace_id": "namespace-alpha",
+  "client_id": "client-demo",
+  "client_epoch": "epoch-1",
+  "batch_id": "batch-demo-1",
+  "result": "committed",
+  "client_sequence": {
+    "from": 1,
+    "to": 3
+  },
+  "archive_sequence": {
+    "from": 1,
+    "to": 3
+  },
+  "mutation_count": 3,
+  "batch_hash": "9db252ef5239032b27d4c105fdbad3f62d953cb9b8fbc712a9c8fb53b683d5c3",
+  "prior_chain_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "chain_hash": "435537354c368ff5d0e80412ab1e22afdc13bcbc6f8f7d21da499e2a424a1aa5",
+  "checkpoint": {
+    "namespace_id": "namespace-alpha",
+    "archive_seq": 3,
+    "chain_hash": "435537354c368ff5d0e80412ab1e22afdc13bcbc6f8f7d21da499e2a424a1aa5",
+    "schema_revision": 1
+  },
+  "capability_revision": "cap-1"
+}

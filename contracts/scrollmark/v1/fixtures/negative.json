@@ -1,0 +1,471 @@
+[
+  {
+    "name": "missing-namespace-context",
+    "value": {
+      "protocol": {
+        "major": 1,
+        "minor": 0
+      },
+      "request_id": "req-invalid-1",
+      "archive_id": "archive-demo",
+      "client_id": "client-demo",
+      "client_epoch": "epoch-1",
+      "sent_at_ms": 1700000000000,
+      "client_sequence": {
+        "from": 1,
+        "to": 1
+      },
+      "batch": {
+        "batch_id": "batch-invalid-1",
+        "mutation_count": 1,
+        "mutations": [],
+        "batch_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "known_checkpoint": null
+    },
+    "expected_code": "missing:namespace_id"
+  },
+  {
+    "name": "sequence-gap",
+    "value": {
+      "protocol": {
+        "major": 1,
+        "minor": 0
+      },
+      "request_id": "req-invalid-2",
+      "archive_id": "archive-demo",
+      "namespace_id": "namespace-alpha",
+      "client_id": "client-demo",
+      "client_epoch": "epoch-1",
+      "sent_at_ms": 1700000000000,
+      "client_sequence": {
+        "from": 1,
+        "to": 2
+      },
+      "batch": {
+        "batch_id": "batch-invalid-2",
+        "mutation_count": 2,
+        "mutations": [
+          {
+            "mutation_id": "m-gap-1",
+            "client_seq": 1,
+            "kind": "entity_upsert",
+            "schema_revision": 1,
+            "target": {
+              "kind": "tweet",
+              "id": "tweet-1"
+            },
+            "payload": {},
+            "record_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "provenance": {
+              "source": "fixture"
+            },
+            "observed_at_ms": 1
+          },
+          {
+            "mutation_id": "m-gap-2",
+            "client_seq": 3,
+            "kind": "entity_upsert",
+            "schema_revision": 1,
+            "target": {
+              "kind": "tweet",
+              "id": "tweet-2"
+            },
+            "payload": {},
+            "record_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "provenance": {
+              "source": "fixture"
+            },
+            "observed_at_ms": 2
+          }
+        ],
+        "batch_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "known_checkpoint": null
+    },
+    "expected_code": "client_sequence_not_contiguous"
+  },
+  {
+    "name": "cross-namespace-relationship",
+    "value": {
+      "protocol": {
+        "major": 1,
+        "minor": 0
+      },
+      "request_id": "req-invalid-3",
+      "archive_id": "archive-demo",
+      "namespace_id": "namespace-alpha",
+      "client_id": "client-demo",
+      "client_epoch": "epoch-1",
+      "sent_at_ms": 1700000000000,
+      "client_sequence": {
+        "from": 1,
+        "to": 1
+      },
+      "batch": {
+        "batch_id": "batch-invalid-3",
+        "mutation_count": 1,
+        "mutations": [
+          {
+            "mutation_id": "m-cross-1",
+            "client_seq": 1,
+            "kind": "relationship_upsert",
+            "schema_revision": 1,
+            "relationship_kind": "social_edge",
+            "subject": {
+              "namespace_id": "namespace-alpha",
+              "kind": "user",
+              "id": "namespace-alpha:user-1"
+            },
+            "object": {
+              "namespace_id": "namespace-beta",
+              "kind": "user",
+              "id": "namespace-beta:user-2"
+            },
+            "qualifier": null,
+            "payload": {},
+            "record_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "provenance": {
+              "source": "fixture"
+            },
+            "observed_at_ms": 1
+          }
+        ],
+        "batch_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "known_checkpoint": null
+    },
+    "expected_code": "relationship_namespace_context_required"
+  },
+  {
+    "name": "unknown-required-protocol-major",
+    "value": {
+      "protocol": {
+        "major": 2,
+        "minor": 0
+      },
+      "request_id": "req-invalid-4",
+      "archive_id": "archive-demo",
+      "namespace_id": "namespace-alpha",
+      "client_id": "client-demo",
+      "client_epoch": "epoch-1",
+      "sent_at_ms": 1700000000000,
+      "client_sequence": {
+        "from": 1,
+        "to": 1
+      },
+      "batch": {
+        "batch_id": "batch-invalid-4",
+        "mutation_count": 1,
+        "mutations": [],
+        "batch_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "known_checkpoint": null
+    },
+    "expected_code": "protocol_version_unsupported"
+  },
+  {
+    "name": "record-hash-mismatch",
+    "value": {
+      "protocol": {
+        "major": 1,
+        "minor": 0
+      },
+      "request_id": "req-invalid-5",
+      "archive_id": "archive-demo",
+      "namespace_id": "namespace-alpha",
+      "client_id": "client-demo",
+      "client_epoch": "epoch-1",
+      "sent_at_ms": 1700000000000,
+      "client_sequence": {
+        "from": 1,
+        "to": 3
+      },
+      "batch": {
+        "batch_id": "batch-invalid-5",
+        "mutation_count": 3,
+        "mutations": [
+          {
+            "mutation_id": "mutation-tweet-1",
+            "client_seq": 1,
+            "kind": "entity_upsert",
+            "schema_revision": 1,
+            "target": {
+              "namespace_id": "namespace-alpha",
+              "kind": "tweet",
+              "id": "tweet-1"
+            },
+            "payload": {
+              "rest_id": "tweet-1",
+              "text": "A deterministic fixture",
+              "article_markdown": "# Fixture"
+            },
+            "record_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "provenance": {
+              "source": "fixture",
+              "source_event_id": "event-1",
+              "extract_path": "fixture.tweet",
+              "extractor_rev": "fixture-1"
+            },
+            "observed_at_ms": 1700000000001
+          },
+          {
+            "mutation_id": "mutation-folder-1",
+            "client_seq": 2,
+            "kind": "entity_upsert",
+            "schema_revision": 1,
+            "target": {
+              "namespace_id": "namespace-alpha",
+              "kind": "folder",
+              "id": "folder-1"
+            },
+            "payload": {
+              "folder_id": "folder-1",
+              "label": "Research"
+            },
+            "record_hash": "47fa7c7de4b099b531b68c85542f415da04cf463b9d1b02d658009f9a90066d0",
+            "provenance": {
+              "source": "fixture",
+              "source_event_id": "event-2",
+              "extract_path": "fixture.folder",
+              "extractor_rev": "fixture-1"
+            },
+            "observed_at_ms": 1700000000002
+          },
+          {
+            "mutation_id": "mutation-capture-1",
+            "client_seq": 3,
+            "kind": "relationship_upsert",
+            "schema_revision": 1,
+            "relationship_kind": "bookmark_folder_membership",
+            "subject": {
+              "namespace_id": "namespace-alpha",
+              "kind": "tweet",
+              "id": "tweet-1"
+            },
+            "object": {
+              "namespace_id": "namespace-alpha",
+              "kind": "folder",
+              "id": "folder-1"
+            },
+            "qualifier": null,
+            "payload": {
+              "membership": "active"
+            },
+            "record_hash": "b35021c648521e4116a585eba48be58c8499cc51ab232e563761f681603bf74b",
+            "provenance": {
+              "source": "fixture",
+              "source_event_id": "event-3",
+              "extract_path": "fixture.membership",
+              "extractor_rev": "fixture-1"
+            },
+            "observed_at_ms": 1700000000003
+          }
+        ],
+        "batch_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "known_checkpoint": null
+    },
+    "expected_code": "record_hash_mismatch"
+  },
+  {
+    "name": "privacy-dm-enabled",
+    "value": {
+      "format": "scrollmark.compatibility-matrix.v1",
+      "matrix_revision": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor_min": 0,
+        "minor_max": 0,
+        "required_header": "X-Scrollmark-Protocol",
+        "hash_algorithm": "sha256-jcs-hex"
+      },
+      "canonical_schema": {
+        "current_revision": 1,
+        "accepted_revisions": [
+          1
+        ],
+        "unknown_major_action": "fail_closed",
+        "unknown_required_field_action": "fail_closed",
+        "unknown_optional_field_action": "ignore"
+      },
+      "clients": [
+        {
+          "name": "browser-userscript",
+          "min_protocol": {
+            "major": 1,
+            "minor": 0
+          },
+          "max_protocol": {
+            "major": 1,
+            "minor": 0
+          },
+          "schema_revisions": [
+            1
+          ]
+        },
+        {
+          "name": "companion-reference",
+          "min_protocol": {
+            "major": 1,
+            "minor": 0
+          },
+          "max_protocol": {
+            "major": 1,
+            "minor": 0
+          },
+          "schema_revisions": [
+            1
+          ]
+        }
+      ],
+      "limits": {
+        "max_mutations_per_batch": 4096,
+        "max_request_bytes": 8388608,
+        "max_response_bytes": 16777216,
+        "max_reconciliation_items_per_page": 4096,
+        "max_reconciliation_bytes_per_page": 8388608,
+        "max_stream_pages": 4096,
+        "max_stream_lifetime_ms": 900000,
+        "retained_journal_window": 1000000
+      },
+      "features": {
+        "entity_upsert": true,
+        "relationship_upsert": true,
+        "enrichment_upsert": true,
+        "semantic_tombstone": true,
+        "delta_reconciliation": true,
+        "state_bootstrap": true,
+        "idempotent_receipts": true,
+        "encrypted_snapshots": false,
+        "direct_messages": true
+      },
+      "error_codes": [
+        "protocol_version_unsupported",
+        "auth_required",
+        "origin_denied",
+        "archive_binding_mismatch",
+        "namespace_not_active",
+        "identity_required",
+        "client_epoch_unknown",
+        "client_sequence_gap",
+        "batch_hash_mismatch",
+        "mutation_hash_conflict",
+        "validation_failed",
+        "checkpoint_mismatch",
+        "checkpoint_expired",
+        "stream_expired",
+        "limit_exceeded",
+        "companion_busy",
+        "companion_unavailable",
+        "internal_commit_unknown"
+      ]
+    },
+    "expected_code": "privacy_dm_enabled"
+  },
+  {
+    "name": "unknown-required-field",
+    "value": {
+      "protocol": {
+        "major": 1,
+        "minor": 0,
+        "required_future": true
+      },
+      "request_id": "req-invalid-6",
+      "archive_id": "archive-demo",
+      "namespace_id": "namespace-alpha",
+      "client_id": "client-demo",
+      "client_epoch": "epoch-1",
+      "sent_at_ms": 1700000000000,
+      "client_sequence": {
+        "from": 1,
+        "to": 3
+      },
+      "batch": {
+        "batch_id": "batch-demo-1",
+        "mutation_count": 3,
+        "mutations": [
+          {
+            "mutation_id": "mutation-tweet-1",
+            "client_seq": 1,
+            "kind": "entity_upsert",
+            "schema_revision": 1,
+            "target": {
+              "namespace_id": "namespace-alpha",
+              "kind": "tweet",
+              "id": "tweet-1"
+            },
+            "payload": {
+              "rest_id": "tweet-1",
+              "text": "A deterministic fixture",
+              "article_markdown": "# Fixture"
+            },
+            "record_hash": "90f4fc8815ab53248d50d8a1461ccdd219005e58d4767100f516870536d853c1",
+            "provenance": {
+              "source": "fixture",
+              "source_event_id": "event-1",
+              "extract_path": "fixture.tweet",
+              "extractor_rev": "fixture-1"
+            },
+            "observed_at_ms": 1700000000001
+          },
+          {
+            "mutation_id": "mutation-folder-1",
+            "client_seq": 2,
+            "kind": "entity_upsert",
+            "schema_revision": 1,
+            "target": {
+              "namespace_id": "namespace-alpha",
+              "kind": "folder",
+              "id": "folder-1"
+            },
+            "payload": {
+              "folder_id": "folder-1",
+              "label": "Research"
+            },
+            "record_hash": "47fa7c7de4b099b531b68c85542f415da04cf463b9d1b02d658009f9a90066d0",
+            "provenance": {
+              "source": "fixture",
+              "source_event_id": "event-2",
+              "extract_path": "fixture.folder",
+              "extractor_rev": "fixture-1"
+            },
+            "observed_at_ms": 1700000000002
+          },
+          {
+            "mutation_id": "mutation-capture-1",
+            "client_seq": 3,
+            "kind": "relationship_upsert",
+            "schema_revision": 1,
+            "relationship_kind": "bookmark_folder_membership",
+            "subject": {
+              "namespace_id": "namespace-alpha",
+              "kind": "tweet",
+              "id": "tweet-1"
+            },
+            "object": {
+              "namespace_id": "namespace-alpha",
+              "kind": "folder",
+              "id": "folder-1"
+            },
+            "qualifier": null,
+            "payload": {
+              "membership": "active"
+            },
+            "record_hash": "b35021c648521e4116a585eba48be58c8499cc51ab232e563761f681603bf74b",
+            "provenance": {
+              "source": "fixture",
+              "source_event_id": "event-3",
+              "extract_path": "fixture.membership",
+              "extractor_rev": "fixture-1"
+            },
+            "observed_at_ms": 1700000000003
+          }
+        ],
+        "batch_hash": "9db252ef5239032b27d4c105fdbad3f62d953cb9b8fbc712a9c8fb53b683d5c3"
+      },
+      "known_checkpoint": null
+    },
+    "expected_code": "unknown_required_field"
+  }
+]

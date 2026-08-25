@@ -15,6 +15,7 @@ type ControlPanelShellProps = {
   description: string;
   hookLine: string;
   healthLine: string;
+  persistenceLine?: string;
   onToggle: () => void;
   children: ComponentChildren;
 };
@@ -27,6 +28,7 @@ export function ControlPanelShell({
   description,
   hookLine,
   healthLine,
+  persistenceLine,
   onToggle,
   children,
 }: ControlPanelShellProps) {
@@ -67,6 +69,11 @@ export function ControlPanelShell({
       <p class="mx-4 mb-1 font-mono text-xs leading-none text-base-content text-opacity-60">
         {healthLine}
       </p>
+      {persistenceLine ? (
+        <p class="mx-4 mb-1 font-mono text-xs leading-none text-base-content text-opacity-60">
+          {persistenceLine}
+        </p>
+      ) : null}
       <div class="divider mt-0 mb-0"></div>
       <main class="min-h-0 grow overflow-y-auto overscroll-contain scroll-smooth">
         <div class="pl-4 pr-2">{children}</div>

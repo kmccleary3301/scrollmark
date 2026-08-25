@@ -147,6 +147,7 @@ async function installApp(page, url, errors, consoleMessages) {
   await page.addInitScript(() => {
     window.__META_DATA__ = { userId: 'export-modal-harness' };
     window.unsafeWindow = window;
+    window.__twe_allow_continuity_local_fallback_v1 = true;
     window.localStorage.setItem('twe_enable_synthetic_db_tools_v1', '1');
     window.localStorage.setItem(
       'scrollmark',
@@ -271,6 +272,9 @@ try {
     .textContent();
 
   const allExportModal = await openExportModal(page);
+  const companionExportDisabledWithoutPairing = await allExportModal
+    .getByRole('button', { name: 'Export Companion Namespace' })
+    .isDisabled();
   await allExportModal.getByRole('button', { name: 'Start Export' }).click();
   const allDownload = await waitForDownload(page, 1, '.json', true);
   const allRows = JSON.parse(allDownload.text);
@@ -466,6 +470,11 @@ try {
         typeof summaryAfterSourceSortClick === 'string' &&
         summaryAfterSourceSortClick.includes(`/${EXPORT_COUNT}`),
       details: { summaryAfterSourceSortClick },
+    },
+    {
+      name: 'canonical companion namespace export is visible and disabled without pairing',
+      ok: companionExportDisabledWithoutPairing,
+      details: { companionExportDisabledWithoutPairing },
     },
     {
       name: 'all-results JSON export streams from the active source and preserves row count',

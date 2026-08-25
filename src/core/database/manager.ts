@@ -1,5 +1,7 @@
 import Dexie, { IndexableType, KeyPaths, Table } from 'dexie';
 import { exportDB, importInto, type ImportOptions } from 'dexie-export-import';
+import { canonicalize } from '@/core/durability/contracts';
+import { IncrementalSha256 } from '@/core/durability/incremental-sha256';
 
 import {
   ImportedBundle,
@@ -317,8 +319,7 @@ export class DatabaseManager {
   private writeQueue: Promise<void> = Promise.resolve();
   private captureIndexBuilds = new Map<string, Promise<boolean>>();
   private captureIndexRevisionFallback = new Map<string, number>();
-
-  constructor() {
+  constructor(managerOptions: { databaseName?: string; publishActiveName?: boolean } = {}) {
     let userId = 'unknown';
     try {
       const globalObject = getUnsafeWindow() as typeof globalThis & {
@@ -331,11 +332,10 @@ export class DatabaseManager {
     const suffix = options.get('dedicatedDbForAccounts') ? `_${userId}` : '';
     logger.debug(`Using database: ${DB_NAME}${suffix} for userId: ${userId}`);
 
-    this.db = new Dexie(`${DB_NAME}${suffix}`);
-    this.publishActiveDatabaseName();
+    this.db = new Dexie(managerOptions.databaseName?.trim() || `${DB_NAME}${suffix}`);
+    if (managerOptions.publishActiveName !== false) this.publishActiveDatabaseName();
     this.ready = this.init();
   }
-
   async whenReady(): Promise<void> {
     await this.ready;
   }
@@ -353,10 +353,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Type-Safe Table Accessors
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Type-Safe Table Accessors
+|--------------------------------------------------------------------------
+*/
 
   private tweets() {
     return this.db.table<Tweet>('tweets');
@@ -407,10 +407,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Read Methods for Extensions
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Read Methods for Extensions
+|--------------------------------------------------------------------------
+*/
 
   private normalizeFolderSourceIds(folderIds: string[]): string[] {
     return [
@@ -2261,10 +2261,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Write Methods for Extensions
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Write Methods for Extensions
+|--------------------------------------------------------------------------
+*/
 
   async extAddTweets(extName: string, tweets: Tweet[]) {
     const normalizedTweets = this.normalizeRowsByRestId(tweets);
@@ -2691,10 +2691,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Delete Methods for Extensions
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Delete Methods for Extensions
+|--------------------------------------------------------------------------
+*/
 
   async extClearCaptures(extName: string) {
     const captures = await this.extGetCaptures(extName);
@@ -2845,10 +2845,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Export and Import Methods
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Export and Import Methods
+|--------------------------------------------------------------------------
+*/
 
   async export() {
     return exportDB(this.db).catch(this.logError);
@@ -2896,6 +2896,7 @@ export class DatabaseManager {
         users: await this.users().count(),
         captures: await this.captures().count(),
         social_edges: await this.socialEdges().count(),
+        capture_index_pages: await this.captureIndexPages().count(),
         imported_bundles: await this.importedBundles().count(),
         imported_entity_snapshots: await this.importedEntitySnapshots().count(),
         search_documents: await this.searchDocuments().count(),
@@ -3015,10 +3016,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Common Methods
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Common Methods
+|--------------------------------------------------------------------------
+*/
 
   private buildTweetSearchDocuments(extName: string, tweets: Tweet[]): SearchDocumentRow[] {
     const now = Date.now();
@@ -3633,10 +3634,10 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Migrations
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Migrations
+|--------------------------------------------------------------------------
+*/
 
   async init() {
     // Indexes for the "tweets" table.
@@ -3837,14 +3838,260 @@ export class DatabaseManager {
   }
 
   /*
-  |--------------------------------------------------------------------------
-  | Loggers
-  |--------------------------------------------------------------------------
-  */
+|--------------------------------------------------------------------------
+| Loggers
+|--------------------------------------------------------------------------
+*/
 
   logError(error: unknown, operation?: string) {
     const message = error instanceof Error ? error.message : String(error);
     const prefix = operation ? `Database Error (${operation})` : 'Database Error';
     logger.error(`${prefix}: ${message}`, error);
+  }
+
+  async deleteGenerationPatchStubs(): Promise<number> {
+    await this.whenReady();
+    return this.enqueueWrite('deleteGenerationPatchStubs', async () =>
+      this.db.transaction('rw', this.tweets(), async () =>
+        this.tweets()
+          .filter(
+            (tweet) =>
+              (tweet as unknown as Record<string, unknown>).__scrollmark_generation_patch_stub ===
+              true,
+          )
+          .delete(),
+      ),
+    );
+  }
+
+  async generationProjectionHash(): Promise<string> {
+    await this.whenReady();
+    const hash = new IncrementalSha256();
+    const tables = [
+      this.tweets(),
+      this.users(),
+      this.captures(),
+      this.captureIndexPages(),
+      this.folderSourceIndexPages(),
+      this.socialEdges(),
+      this.importedBundles(),
+      this.importedBundleCollections(),
+      this.importedBundleItems(),
+      this.importedEntitySnapshots(),
+      this.importedBundleImportReports(),
+      this.searchDocuments(),
+    ];
+    for (const table of tables) {
+      hash.update(`${canonicalize(table.name)}:[`);
+      let first = true;
+      await table.orderBy(':id').each((row) => {
+        if (!first) hash.update(',');
+        hash.update(canonicalize(row));
+        first = false;
+      });
+      hash.update(']\n');
+    }
+    return hash.digestHex();
+  }
+
+  async applyGenerationProjection(args: {
+    tweets?: Tweet[];
+    tweetPatches?: Array<{ id: string; fields: Partial<Tweet> }>;
+    users?: User[];
+    captures?: Capture[];
+    socialEdges?: SocialEdge[];
+    deleteTweets?: string[];
+    deleteUsers?: string[];
+    deleteCaptures?: string[];
+    deleteSocialEdges?: string[];
+  }): Promise<void> {
+    await this.whenReady();
+    const tweets = args.tweets ?? [];
+    const tweetPatches = args.tweetPatches ?? [];
+    const users = args.users ?? [];
+    const captures = args.captures ?? [];
+    const socialEdges = args.socialEdges ?? [];
+    const deleteTweets = [...new Set((args.deleteTweets ?? []).map(String).filter(Boolean))];
+    const deleteUsers = [...new Set((args.deleteUsers ?? []).map(String).filter(Boolean))];
+    const deleteCaptures = [...new Set((args.deleteCaptures ?? []).map(String).filter(Boolean))];
+    const deleteSocialEdges = [
+      ...new Set((args.deleteSocialEdges ?? []).map(String).filter(Boolean)),
+    ];
+    if (
+      !tweets.length &&
+      !tweetPatches.length &&
+      !users.length &&
+      !captures.length &&
+      !socialEdges.length &&
+      !deleteTweets.length &&
+      !deleteUsers.length &&
+      !deleteCaptures.length &&
+      !deleteSocialEdges.length
+    ) {
+      return;
+    }
+    await this.enqueueWrite('applyGenerationProjection', async () => {
+      await this.db.transaction(
+        'rw',
+        this.tweets(),
+        this.users(),
+        this.captures(),
+        this.socialEdges(),
+        async () => {
+          if (deleteTweets.length) await this.tweets().bulkDelete(deleteTweets);
+          if (deleteUsers.length) await this.users().bulkDelete(deleteUsers);
+          if (deleteCaptures.length) await this.captures().bulkDelete(deleteCaptures);
+          if (deleteSocialEdges.length) await this.socialEdges().bulkDelete(deleteSocialEdges);
+          if (tweets.length) {
+            const existing = await this.tweets().bulkGet(tweets.map((tweet) => tweet.rest_id));
+            await this.bulkPutInChunks(
+              this.tweets(),
+              tweets.map((tweet, index) => mergeTweetMetadata(existing[index], tweet)),
+            );
+          }
+          if (tweetPatches.length) {
+            const existing = await this.tweets().bulkGet(tweetPatches.map((patch) => patch.id));
+            const patched = tweetPatches.map((patch, index) => {
+              const current =
+                existing[index] ??
+                ({
+                  rest_id: patch.id,
+                  __scrollmark_generation_patch_stub: true,
+                } as unknown as Tweet);
+              return {
+                ...current,
+                ...patch.fields,
+                rest_id: patch.id,
+                twe_private_fields: {
+                  ...current.twe_private_fields,
+                  ...patch.fields.twe_private_fields,
+                },
+              } as Tweet;
+            });
+            await this.bulkPutInChunks(this.tweets(), patched);
+          }
+          if (users.length) await this.bulkPutInChunks(this.users(), users);
+          if (captures.length) await this.bulkPutInChunks(this.captures(), captures);
+          if (socialEdges.length) await this.bulkPutInChunks(this.socialEdges(), socialEdges);
+        },
+      );
+      const extensions = [
+        ...captures.map((capture) => capture.extension),
+        ...socialEdges.map((edge) => edge.extension),
+      ];
+      for (const extension of new Set(extensions.filter(Boolean))) {
+        await this.invalidateFolderSourceIndexPagesForExtensions([extension]);
+      }
+    });
+  }
+
+  async rebuildGenerationSearchDocuments(
+    onProgress?: (processed: number) => void,
+  ): Promise<number> {
+    await this.whenReady();
+    return this.enqueueWrite('rebuildGenerationSearchDocuments', async () => {
+      await this.db.transaction('rw', this.searchDocuments(), async () => {
+        await this.searchDocuments().where('source_kind').equals('live').delete();
+      });
+      let processed = 0;
+      let lastCaptureId: string | null = null;
+      while (true) {
+        const captures: Capture[] = await (
+          lastCaptureId
+            ? this.captures().where('id').above(lastCaptureId)
+            : this.captures().orderBy('id')
+        )
+          .limit(DB_WRITE_CHUNK_SIZE)
+          .toArray();
+        if (!captures.length) break;
+        const tweetIdsByExtension = new Map<string, Set<string>>();
+        const userIdsByExtension = new Map<string, Set<string>>();
+        for (const capture of captures) {
+          const extension = String(capture.extension || '').trim();
+          const dataKey = String(capture.data_key || '').trim();
+          if (!extension || !dataKey) continue;
+          const target =
+            capture.type === ExtensionType.USER ? userIdsByExtension : tweetIdsByExtension;
+          const ids = target.get(extension) ?? new Set<string>();
+          ids.add(dataKey);
+          target.set(extension, ids);
+        }
+        for (const [extension, ids] of tweetIdsByExtension) {
+          const rows = (await this.tweets().bulkGet([...ids])).filter((tweet): tweet is Tweet =>
+            Boolean(tweet),
+          );
+          const documents = this.buildTweetSearchDocuments(extension, rows);
+          if (documents.length) {
+            await this.db.transaction('rw', this.searchDocuments(), async () => {
+              await this.bulkPutInChunks(this.searchDocuments(), documents);
+            });
+          }
+        }
+        for (const [extension, ids] of userIdsByExtension) {
+          const rows = (await this.users().bulkGet([...ids])).filter((user): user is User =>
+            Boolean(user),
+          );
+          const documents = this.buildUserSearchDocuments(extension, rows);
+          if (documents.length) {
+            await this.db.transaction('rw', this.searchDocuments(), async () => {
+              await this.bulkPutInChunks(this.searchDocuments(), documents);
+            });
+          }
+        }
+        processed += captures.length;
+        onProgress?.(processed);
+        lastCaptureId = captures[captures.length - 1]?.id ?? null;
+        if (!lastCaptureId || captures.length < DB_WRITE_CHUNK_SIZE) break;
+      }
+      this.publishCaptureCountSnapshotForAllKnownExtensions();
+      return processed;
+    });
+  }
+
+  async rebuildGenerationDerivedIndexes(): Promise<void> {
+    await this.whenReady();
+    const scopes = new Map<string, { extension: string; type: ExtensionType; count: number }>();
+    await this.captures().each((capture) => {
+      const extension = String(capture.extension || '').trim();
+      if (!extension) return;
+      const type = Object.values(ExtensionType).includes(capture.type as ExtensionType)
+        ? (capture.type as ExtensionType)
+        : ExtensionType.CUSTOM;
+      const key = `${extension}|${type}`;
+      const scope = scopes.get(key) ?? { extension, type, count: 0 };
+      scope.count += 1;
+      scopes.set(key, scope);
+    });
+    for (const scope of scopes.values()) {
+      await this.extBuildCaptureIndexPages(scope.extension, {
+        type: scope.type,
+        order: 'newest',
+        sourceCount: scope.count,
+      });
+      await this.extBuildCaptureIndexPages(scope.extension, {
+        type: scope.type,
+        order: 'oldest',
+        sourceCount: scope.count,
+      });
+    }
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  async readGenerationSourceRows(): Promise<{
+    tweets: Tweet[];
+    users: User[];
+    captures: Capture[];
+    socialEdges: SocialEdge[];
+  }> {
+    await this.whenReady();
+    return {
+      tweets: await this.tweets().toArray(),
+      users: await this.users().toArray(),
+      captures: await this.captures().toArray(),
+      socialEdges: await this.socialEdges().toArray(),
+    };
   }
 }

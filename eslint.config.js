@@ -21,6 +21,19 @@ export default tseslint.config(
     },
   },
   {
+    files: ['contracts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        Buffer: 'readonly',
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
+    rules: {
+      'prettier/prettier': 'off',
+    },
+  },
+  {
     ignores: ['dist', 'node_modules', 'store/*.user.js'],
   },
 );

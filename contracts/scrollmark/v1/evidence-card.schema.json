@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrollmark.local/contracts/scrollmark/v1/evidence-card.schema.json",
+  "title": "Scrollmark Durability Evidence Card v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "card_version",
+    "card_id",
+    "scenario",
+    "status",
+    "source_identity",
+    "fixture",
+    "expected",
+    "observed",
+    "oracles",
+    "privacy",
+    "retries",
+    "artifacts"
+  ],
+  "properties": {
+    "card_version": { "const": 1 },
+    "card_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "scenario": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "status": { "enum": ["passed", "failed", "blocked", "inconclusive"] },
+    "source_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_revision", "config_hash", "contract_revision"],
+      "properties": {
+        "source_revision": { "type": "string", "minLength": 1 },
+        "config_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "contract_revision": { "const": 1 },
+        "build_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "seed", "record_counts", "fixture_hash"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "seed": { "type": "integer", "minimum": 0 },
+        "record_counts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "fixture_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "expected": { "type": "object" },
+    "observed": { "type": "object" },
+    "oracles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_model_hash", "artifact_hashes", "independent_checks"],
+      "properties": {
+        "reference_model_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "artifact_hashes": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+        "independent_checks": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "redacted", "dm_allowed", "excluded_fields"],
+      "properties": {
+        "profile": { "enum": ["safe_shared", "research_full", "private_archive"] },
+        "redacted": { "type": "boolean" },
+        "dm_allowed": { "const": false },
+        "excluded_fields": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "retries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "retryable_failures", "permanent_failures"],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 1 },
+        "retryable_failures": { "type": "integer", "minimum": 0 },
+        "permanent_failures": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "kind"],
+        "properties": {
+          "path": { "type": "string", "pattern": "^[^/][^\\n]*$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "kind": { "enum": ["fixture", "log", "manifest", "snapshot", "screenshot", "metrics"] }
+        }
+      }
+    }
+  }
+}

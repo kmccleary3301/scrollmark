@@ -1,0 +1,50 @@
+{
+  "format": "scrollmark.canonicalization-fixtures.v1",
+  "algorithm": "RFC8785-JCS+SHA-256",
+  "vectors": [
+    {
+      "name": "ordered-object",
+      "input": {
+        "b": 2,
+        "a": 1
+      },
+      "canonical": "{\"a\":1,\"b\":2}",
+      "sha256": "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
+    },
+    {
+      "name": "nested-unicode-array",
+      "input": {
+        "z": [
+          "café",
+          "\u0000",
+          {
+            "β": true,
+            "a": null
+          }
+        ],
+        "A": "line\\nvalue"
+      },
+      "canonical": "{\"A\":\"line\\\\nvalue\",\"z\":[\"café\",\"\\u0000\",{\"a\":null,\"β\":true}]}",
+      "sha256": "cc88b1ccdfe1228ff611a09e31c692c0305501dd598ecaecd6e95050afff7a60"
+    },
+    {
+      "name": "number-boundaries",
+      "input": {
+        "large_fixed": 100000000000000000000,
+        "small_exp": 1e-07,
+        "negative_zero": -0.0,
+        "fraction": 1.25
+      },
+      "canonical": "{\"fraction\":1.25,\"large_fixed\":100000000000000000000,\"negative_zero\":0,\"small_exp\":1e-7}",
+      "sha256": "4c070d275d8ac89db48fcb340930ce89e5eb0b34dc75a3021f171adbdb428a74"
+    },
+    {
+      "name": "absent-versus-null",
+      "input": {
+        "present": null
+      },
+      "canonical": "{\"present\":null}",
+      "sha256": "924c481da1aca4bbd856f20e4aaef20f67c34fccd0b5e27cb2647b8c45ee21ac"
+    }
+  ]
+}

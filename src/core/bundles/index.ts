@@ -1,3 +1,4 @@
+export * from './companion-bridge';
 export * from './exporter';
 export * from './ids';
 export * from './importer';

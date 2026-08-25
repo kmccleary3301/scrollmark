@@ -14,6 +14,10 @@ dist-ssr
 
 # Generated benchmark and browser-QC output
 e2e/perf/out/
+scrollmark_companion/out/
+contracts/scrollmark/v1/out/
+__pycache__/
+.scratch/
 
 # Editor directories and files
 .vscode/*

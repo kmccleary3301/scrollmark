@@ -1,0 +1,100 @@
+{
+  "protocol": {
+    "major": 1,
+    "minor": 0
+  },
+  "request_id": "req-demo-1",
+  "archive_id": "archive-demo",
+  "namespace_id": "namespace-alpha",
+  "client_id": "client-demo",
+  "client_epoch": "epoch-1",
+  "sent_at_ms": 1700000000000,
+  "client_sequence": {
+    "from": 1,
+    "to": 3
+  },
+  "batch": {
+    "batch_id": "batch-demo-1",
+    "mutation_count": 3,
+    "mutations": [
+      {
+        "mutation_id": "mutation-tweet-1",
+        "client_seq": 1,
+        "kind": "entity_upsert",
+        "schema_revision": 1,
+        "target": {
+          "namespace_id": "namespace-alpha",
+          "kind": "tweet",
+          "id": "tweet-1"
+        },
+        "payload": {
+          "rest_id": "tweet-1",
+          "text": "A deterministic fixture",
+          "article_markdown": "# Fixture"
+        },
+        "record_hash": "90f4fc8815ab53248d50d8a1461ccdd219005e58d4767100f516870536d853c1",
+        "provenance": {
+          "source": "fixture",
+          "source_event_id": "event-1",
+          "extract_path": "fixture.tweet",
+          "extractor_rev": "fixture-1"
+        },
+        "observed_at_ms": 1700000000001
+      },
+      {
+        "mutation_id": "mutation-folder-1",
+        "client_seq": 2,
+        "kind": "entity_upsert",
+        "schema_revision": 1,
+        "target": {
+          "namespace_id": "namespace-alpha",
+          "kind": "folder",
+          "id": "folder-1"
+        },
+        "payload": {
+          "folder_id": "folder-1",
+          "label": "Research"
+        },
+        "record_hash": "47fa7c7de4b099b531b68c85542f415da04cf463b9d1b02d658009f9a90066d0",
+        "provenance": {
+          "source": "fixture",
+          "source_event_id": "event-2",
+          "extract_path": "fixture.folder",
+          "extractor_rev": "fixture-1"
+        },
+        "observed_at_ms": 1700000000002
+      },
+      {
+        "mutation_id": "mutation-capture-1",
+        "client_seq": 3,
+        "kind": "relationship_upsert",
+        "schema_revision": 1,
+        "relationship_kind": "bookmark_folder_membership",
+        "subject": {
+          "namespace_id": "namespace-alpha",
+          "kind": "tweet",
+          "id": "tweet-1"
+        },
+        "object": {
+          "namespace_id": "namespace-alpha",
+          "kind": "folder",
+          "id": "folder-1"
+        },
+        "qualifier": null,
+        "payload": {
+          "membership": "active"
+        },
+        "record_hash": "b35021c648521e4116a585eba48be58c8499cc51ab232e563761f681603bf74b",
+        "provenance": {
+          "source": "fixture",
+          "source_event_id": "event-3",
+          "extract_path": "fixture.membership",
+          "extractor_rev": "fixture-1"
+        },
+        "observed_at_ms": 1700000000003
+      }
+    ],
+    "batch_hash": "9db252ef5239032b27d4c105fdbad3f62d953cb9b8fbc712a9c8fb53b683d5c3"
+  },
+  "known_checkpoint": null
+}

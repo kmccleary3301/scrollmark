@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrollmark.local/contracts/scrollmark/v1/compatibility-matrix.schema.json",
+  "title": "Scrollmark Compatibility Matrix v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "matrix_revision", "protocol", "canonical_schema", "clients", "limits", "features", "error_codes"],
+  "properties": {
+    "format": { "const": "scrollmark.compatibility-matrix.v1" },
+    "matrix_revision": { "type": "string", "minLength": 1 },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor_min", "minor_max", "required_header", "hash_algorithm"],
+      "properties": {
+        "major": { "const": 1 },
+        "minor_min": { "const": 0 },
+        "minor_max": { "const": 0 },
+        "required_header": { "const": "X-Scrollmark-Protocol" },
+        "hash_algorithm": { "const": "sha256-jcs-hex" }
+      }
+    },
+    "canonical_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current_revision", "accepted_revisions", "unknown_major_action", "unknown_required_field_action", "unknown_optional_field_action"],
+      "properties": {
+        "current_revision": { "const": 1 },
+        "accepted_revisions": { "type": "array", "minItems": 1, "items": { "const": 1 } },
+        "unknown_major_action": { "const": "fail_closed" },
+        "unknown_required_field_action": { "const": "fail_closed" },
+        "unknown_optional_field_action": { "const": "ignore" }
+      }
+    },
+    "clients": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "min_protocol", "max_protocol", "schema_revisions"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "min_protocol": { "$ref": "#/$defs/version" },
+          "max_protocol": { "$ref": "#/$defs/version" },
+          "schema_revisions": { "type": "array", "minItems": 1, "items": { "const": 1 } }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_mutations_per_batch", "max_request_bytes", "max_response_bytes", "max_reconciliation_items_per_page", "max_reconciliation_bytes_per_page", "max_stream_pages", "max_stream_lifetime_ms", "retained_journal_window"],
+      "properties": {
+        "max_mutations_per_batch": { "type": "integer", "minimum": 1 },
+        "max_request_bytes": { "type": "integer", "minimum": 1 },
+        "max_response_bytes": { "type": "integer", "minimum": 1 },
+        "max_reconciliation_items_per_page": { "type": "integer", "minimum": 1 },
+        "max_reconciliation_bytes_per_page": { "type": "integer", "minimum": 1 },
+        "max_stream_pages": { "type": "integer", "minimum": 1 },
+        "max_stream_lifetime_ms": { "type": "integer", "minimum": 1 },
+        "retained_journal_window": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "features": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "error_codes": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": {
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": { "major": { "const": 1 }, "minor": { "const": 0 } }
+    }
+  }
+}

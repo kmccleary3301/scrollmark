@@ -38,6 +38,31 @@ export interface BundleManifestCounts {
   mediaBlobs: number;
 }
 
+export interface CompanionSourceMetadata {
+  format: 'scrollmark.companion-source.v1';
+  protocolVersion: { major: number; minor: number };
+  schemaRevision: number;
+  bridgeRevision: 1;
+  archiveFingerprint: string;
+  namespaceFingerprint: string;
+  checkpoint: { archiveSeq: number; chainHash: string };
+  canonicalStateManifestHash: string;
+  records: {
+    total: number;
+    tweets: number;
+    users: number;
+    socialEdges: number;
+    captures: number;
+    media: number;
+    unknown: number;
+  };
+  privacy: {
+    visibility: 'shared_safe';
+    rawIdentifiersExcludedFromMetadata: true;
+    privateMessagesExcluded: true;
+  };
+  warnings: string[];
+}
 export interface BundleManifest {
   id: string;
   title: string;
@@ -93,6 +118,7 @@ export interface ImportedBundle {
   mediaBlobCount: number;
   manifest: BundleManifest;
   error?: string;
+  companionSource?: CompanionSourceMetadata;
 }
 
 export interface ImportedBundleCollection {

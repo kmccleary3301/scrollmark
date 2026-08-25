@@ -8,6 +8,7 @@ import {
   BundleManifest,
   BundleManifestCounts,
   BundleRecordEnvelope,
+  CompanionSourceMetadata,
 } from './schema';
 import { createBundleZip } from './zip';
 
@@ -15,6 +16,7 @@ export interface BundleExportSourceRow<T = unknown> {
   id: string;
   original: T;
   record: DataType;
+  kind?: BundleEntityKind;
 }
 
 export interface BundleExportOptions {
@@ -26,6 +28,7 @@ export interface BundleExportOptions {
   includeOriginalMetadata?: boolean;
   compressionLevel?: 0 | 1 | 6;
   totalRecords?: number;
+  companionSource?: CompanionSourceMetadata;
   onProgress?: (progress: BundleExportProgress) => void;
 }
 
@@ -97,7 +100,7 @@ async function buildRecordEnvelope<T>(
   row: BundleExportSourceRow<T>,
   options: BundleExportOptions,
 ): Promise<BundleRecordEnvelope> {
-  const kind = inferKind(row.original, row.record);
+  const kind = row.kind ?? inferKind(row.original, row.record);
   const sourceId = String(row.id || row.record.id || row.record.rest_id || '');
   const id = await createBundleRecordId(bundleId, kind, sourceId || JSON.stringify(row.record));
   const data = options.includeOriginalMetadata
@@ -185,6 +188,9 @@ export async function createCanonicalBundleZipFromRows<T>(
   }
   const recordsJsonl = recordsJsonlChunks.join('');
   const privacy = buildBundlePrivacySummary(SAFE_SHARED_DEFAULT_PRIVACY);
+  const companionSourceText = options.companionSource
+    ? JSON.stringify(options.companionSource, undefined, 2)
+    : null;
   const files: BundleFileManifestEntry[] = [
     {
       path: 'manifest.json',
@@ -208,6 +214,15 @@ export async function createCanonicalBundleZipFromRows<T>(
       role: 'media',
       bytes: new TextEncoder().encode(mediaUrlsText).byteLength,
       sha256: await sha256Hex(mediaUrlsText),
+    });
+  }
+  if (companionSourceText) {
+    files.push({
+      path: 'metadata/companion-source.json',
+      contentType: 'application/json',
+      role: 'metadata',
+      bytes: new TextEncoder().encode(companionSourceText).byteLength,
+      sha256: await sha256Hex(companionSourceText),
     });
   }
 
@@ -250,6 +265,13 @@ export async function createCanonicalBundleZipFromRows<T>(
   ];
   if (mediaUrlLines.length) {
     entries.push({ path: 'media/media-urls.txt', data: mediaUrlsText, level: compressionLevel });
+  }
+  if (companionSourceText) {
+    entries.push({
+      path: 'metadata/companion-source.json',
+      data: companionSourceText,
+      level: compressionLevel,
+    });
   }
   reportProgress('zip', processedRecords);
 

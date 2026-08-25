@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrollmark.local/contracts/scrollmark/v1/archive-delta.schema.json",
+  "title": "Scrollmark Archive Delta and Proof Protocol v1",
+  "description": "Storage-layout-independent canonical mutation, receipt, checkpoint, reconciliation, capability, and error envelopes.",
+  "oneOf": [
+    { "$ref": "#/$defs/archiveDeltaRequest" },
+    { "$ref": "#/$defs/commitReceipt" },
+    { "$ref": "#/$defs/reconciliationRequest" },
+    { "$ref": "#/$defs/reconciliationPage" },
+    { "$ref": "#/$defs/protocolError" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "const": 1 },
+        "minor": { "const": 0 },
+        "extensions": { "type": "object" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "request_id",
+        "archive_id",
+        "namespace_id",
+        "client_id",
+        "client_epoch",
+        "sent_at_ms"
+      ],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "request_id": { "$ref": "#/$defs/id" },
+        "archive_id": { "$ref": "#/$defs/id" },
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "client_id": { "$ref": "#/$defs/id" },
+        "client_epoch": { "$ref": "#/$defs/id" },
+        "sent_at_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace_id", "archive_seq", "chain_hash", "schema_revision"],
+      "properties": {
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "archive_seq": { "type": "integer", "minimum": 0 },
+        "chain_hash": { "$ref": "#/$defs/hash" },
+        "schema_revision": { "const": 1 }
+      }
+    },
+    "sequenceRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "integer", "minimum": 1 },
+        "to": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["source"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source_event_id": { "$ref": "#/$defs/id" },
+        "extract_path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "extractor_rev": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "entityTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace_id", "kind", "id"],
+      "properties": {
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["tweet", "user", "folder", "media_reference"] },
+        "id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace_id", "kind", "id"],
+      "properties": {
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["tweet", "user", "folder", "media_reference"] },
+        "id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "entityUpsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation_id",
+        "client_seq",
+        "kind",
+        "schema_revision",
+        "target",
+        "payload",
+        "record_hash",
+        "provenance",
+        "observed_at_ms"
+      ],
+      "properties": {
+        "mutation_id": { "$ref": "#/$defs/id" },
+        "client_seq": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "entity_upsert" },
+        "schema_revision": { "const": 1 },
+        "target": { "$ref": "#/$defs/entityTarget" },
+        "payload": { "type": "object" },
+        "record_hash": { "$ref": "#/$defs/hash" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "observed_at_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "relationshipUpsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation_id",
+        "client_seq",
+        "kind",
+        "schema_revision",
+        "relationship_kind",
+        "subject",
+        "object",
+        "qualifier",
+        "payload",
+        "record_hash",
+        "provenance",
+        "observed_at_ms"
+      ],
+      "properties": {
+        "mutation_id": { "$ref": "#/$defs/id" },
+        "client_seq": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "relationship_upsert" },
+        "schema_revision": { "const": 1 },
+        "relationship_kind": {
+          "enum": [
+            "capture_membership",
+            "bookmark_folder_membership",
+            "social_edge",
+            "tweet_reference",
+            "interaction_state",
+            "article_media_association"
+          ]
+        },
+        "subject": { "$ref": "#/$defs/endpoint" },
+        "object": { "$ref": "#/$defs/endpoint" },
+        "qualifier": { "type": ["object", "null"] },
+        "payload": { "type": "object" },
+        "record_hash": { "$ref": "#/$defs/hash" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "observed_at_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "enrichmentUpsert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation_id",
+        "client_seq",
+        "kind",
+        "schema_revision",
+        "target",
+        "enrichment_kind",
+        "payload",
+        "record_hash",
+        "provenance",
+        "observed_at_ms"
+      ],
+      "properties": {
+        "mutation_id": { "$ref": "#/$defs/id" },
+        "client_seq": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "enrichment_upsert" },
+        "schema_revision": { "const": 1 },
+        "target": { "$ref": "#/$defs/entityTarget" },
+        "enrichment_kind": { "enum": ["article_markdown", "media_reference"] },
+        "payload": { "type": "object" },
+        "record_hash": { "$ref": "#/$defs/hash" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "observed_at_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation_id",
+        "client_seq",
+        "kind",
+        "schema_revision",
+        "target_kind",
+        "target_id",
+        "deletion_id",
+        "record_hash",
+        "provenance",
+        "observed_at_ms"
+      ],
+      "properties": {
+        "mutation_id": { "$ref": "#/$defs/id" },
+        "client_seq": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "tombstone" },
+        "schema_revision": { "const": 1 },
+        "target_kind": {
+          "enum": ["tweet", "user", "folder", "media_reference", "relationship", "enrichment"]
+        },
+        "target_id": { "$ref": "#/$defs/id" },
+        "relationship_kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "deletion_id": { "$ref": "#/$defs/id" },
+        "record_hash": { "$ref": "#/$defs/hash" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "observed_at_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "mutation": {
+      "oneOf": [
+        { "$ref": "#/$defs/entityUpsert" },
+        { "$ref": "#/$defs/relationshipUpsert" },
+        { "$ref": "#/$defs/enrichmentUpsert" },
+        { "$ref": "#/$defs/tombstone" }
+      ]
+    },
+    "batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["batch_id", "mutation_count", "mutations", "batch_hash"],
+      "properties": {
+        "batch_id": { "$ref": "#/$defs/id" },
+        "mutation_count": { "type": "integer", "minimum": 1 },
+        "mutations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/mutation" }
+        },
+        "batch_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "archiveDeltaRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "request_id",
+        "archive_id",
+        "namespace_id",
+        "client_id",
+        "client_epoch",
+        "sent_at_ms",
+        "client_sequence",
+        "batch",
+        "known_checkpoint"
+      ],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "request_id": { "$ref": "#/$defs/id" },
+        "archive_id": { "$ref": "#/$defs/id" },
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "client_id": { "$ref": "#/$defs/id" },
+        "client_epoch": { "$ref": "#/$defs/id" },
+        "sent_at_ms": { "type": "integer", "minimum": 0 },
+        "client_sequence": { "$ref": "#/$defs/sequenceRange" },
+        "batch": { "$ref": "#/$defs/batch" },
+        "known_checkpoint": {
+          "anyOf": [
+            { "$ref": "#/$defs/checkpoint" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "commitReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "request_id",
+        "archive_id",
+        "namespace_id",
+        "client_id",
+        "client_epoch",
+        "batch_id",
+        "result",
+        "client_sequence",
+        "archive_sequence",
+        "mutation_count",
+        "batch_hash",
+        "prior_chain_hash",
+        "chain_hash",
+        "checkpoint",
+        "capability_revision"
+      ],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "request_id": { "$ref": "#/$defs/id" },
+        "archive_id": { "$ref": "#/$defs/id" },
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "client_id": { "$ref": "#/$defs/id" },
+        "client_epoch": { "$ref": "#/$defs/id" },
+        "batch_id": { "$ref": "#/$defs/id" },
+        "result": { "enum": ["committed", "duplicate"] },
+        "client_sequence": { "$ref": "#/$defs/sequenceRange" },
+        "archive_sequence": { "$ref": "#/$defs/sequenceRange" },
+        "mutation_count": { "type": "integer", "minimum": 1 },
+        "batch_hash": { "$ref": "#/$defs/hash" },
+        "prior_chain_hash": { "$ref": "#/$defs/hash" },
+        "chain_hash": { "$ref": "#/$defs/hash" },
+        "checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "capability_revision": { "$ref": "#/$defs/id" }
+      }
+    },
+    "reconciliationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "request_id",
+        "archive_id",
+        "namespace_id",
+        "client_id",
+        "client_epoch",
+        "sent_at_ms",
+        "mode",
+        "after_checkpoint",
+        "known_checkpoint",
+        "page_hint"
+      ],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "request_id": { "$ref": "#/$defs/id" },
+        "archive_id": { "$ref": "#/$defs/id" },
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "client_id": { "$ref": "#/$defs/id" },
+        "client_epoch": { "$ref": "#/$defs/id" },
+        "sent_at_ms": { "type": "integer", "minimum": 0 },
+        "mode": { "enum": ["deltas", "state_bootstrap"] },
+        "after_checkpoint": {
+          "anyOf": [
+            { "$ref": "#/$defs/checkpoint" },
+            { "type": "null" }
+          ]
+        },
+        "known_checkpoint": {
+          "anyOf": [
+            { "$ref": "#/$defs/checkpoint" },
+            { "type": "null" }
+          ]
+        },
+        "page_hint": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "reconciliationPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "stream_id",
+        "namespace_id",
+        "mode",
+        "page_index",
+        "item_count",
+        "byte_count",
+        "items",
+        "page_hash",
+        "target_checkpoint",
+        "final"
+      ],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "stream_id": { "$ref": "#/$defs/id" },
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "mode": { "enum": ["deltas", "state_bootstrap"] },
+        "page_index": { "type": "integer", "minimum": 0 },
+        "item_count": { "type": "integer", "minimum": 0 },
+        "byte_count": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array" },
+        "previous_chain_hash": { "$ref": "#/$defs/hash" },
+        "next_chain_hash": { "$ref": "#/$defs/hash" },
+        "next_cursor": { "$ref": "#/$defs/id" },
+        "page_hash": { "$ref": "#/$defs/hash" },
+        "target_checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "manifest_hash": { "$ref": "#/$defs/hash" },
+        "final": { "type": "boolean" }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_versions",
+        "schema_revisions",
+        "hash_algorithm",
+        "capability_revision",
+        "limits",
+        "features"
+      ],
+      "properties": {
+        "protocol_versions": { "type": "array", "minItems": 1 },
+        "schema_revisions": { "type": "array", "minItems": 1, "items": { "const": 1 } },
+        "hash_algorithm": { "const": "sha256-jcs-hex" },
+        "capability_revision": { "$ref": "#/$defs/id" },
+        "limits": { "type": "object", "additionalProperties": false },
+        "features": { "type": "object" }
+      }
+    },
+    "protocolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "request_id", "code", "retryable", "message"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/protocol" },
+        "request_id": { "$ref": "#/$defs/id" },
+        "code": {
+          "enum": [
+            "protocol_version_unsupported",
+            "auth_required",
+            "origin_denied",
+            "archive_binding_mismatch",
+            "namespace_not_active",
+            "identity_required",
+            "client_epoch_unknown",
+            "client_sequence_gap",
+            "batch_hash_mismatch",
+            "mutation_hash_conflict",
+            "validation_failed",
+            "checkpoint_mismatch",
+            "checkpoint_expired",
+            "stream_expired",
+            "limit_exceeded",
+            "companion_busy",
+            "companion_unavailable",
+            "internal_commit_unknown"
+          ]
+        },
+        "retryable": { "type": "boolean" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "archive_id": { "$ref": "#/$defs/id" },
+        "namespace_id": { "$ref": "#/$defs/id" },
+        "expected": { "type": "object" },
+        "observed": { "type": "object" },
+        "retry_after_ms": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -6,6 +6,16 @@ import { getExtensionManager } from './core/extensions';
 import { options } from './core/options';
 import { initializePerformanceMonitoring } from './core/perf/metrics';
 import { installSyntheticDatabaseTools } from './core/database/synthetic-fixtures';
+import { initializeBrowserSafety } from './core/durability/browser-safety';
+import { getDatabaseManager, resetDatabaseManager } from './core/database';
+import { CompanionClient } from './core/durability/companion-client';
+import { ensureCanonicalArchiveProjection } from './core/durability/generation';
+import { readBoundActiveGenerationPointer } from './core/durability/generation-state';
+import {
+  bootstrapExistingBrowserArchiveIfNeeded,
+  recoverInterruptedMigration,
+} from './core/durability/migration';
+import { IdentityController, readPairingContext } from './core/durability/identity';
 
 import BookmarksModule from './modules/bookmarks';
 import CommunityMembersModule from './modules/community-members';
@@ -136,9 +146,95 @@ function mountApp() {
   }
 }
 
-function bootstrap() {
+function mountWhenReady() {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountApp);
+  } else {
+    mountApp();
+  }
+}
+
+async function bootstrap() {
+  let migrationBlocked = false;
+  try {
+    const migrationRecovery = recoverInterruptedMigration();
+    migrationBlocked = migrationRecovery.action === 'rollback_required';
+    if (migrationBlocked) {
+      console.warn(
+        '[twitter-web-exporter] interrupted migration requires explicit recovery',
+        migrationRecovery,
+      );
+    }
+  } catch (error) {
+    migrationBlocked = true;
+    console.warn('[twitter-web-exporter] migration journal recovery failed closed', error);
+  }
+  const pairing = readPairingContext();
+  if (pairing && !migrationBlocked) {
+    const identity = new IdentityController(pairing);
+    const identityAssessment = identity.observe();
+    if (!identityAssessment.admitted) {
+      console.warn(
+        '[twitter-web-exporter] archive projection deferred; identity is not admitted',
+        identityAssessment,
+      );
+    } else {
+      const hasActiveGeneration = Boolean(
+        readBoundActiveGenerationPointer(pairing.archive_id, pairing.namespace_id),
+      );
+      let browserSourcePresent = false;
+      if (!hasActiveGeneration) {
+        try {
+          const sourceCounts = await getDatabaseManager().count();
+          browserSourcePresent = Boolean(
+            sourceCounts &&
+            (sourceCounts.tweets > 0 ||
+              sourceCounts.users > 0 ||
+              sourceCounts.captures > 0 ||
+              sourceCounts.social_edges > 0),
+          );
+        } catch {
+          browserSourcePresent = false;
+        }
+      }
+      try {
+        const client = new CompanionClient(pairing);
+        const bootstrapResult = await bootstrapExistingBrowserArchiveIfNeeded({
+          manager: getDatabaseManager(),
+          identity,
+          pairing,
+          client,
+          clientSequenceStart: 1,
+        });
+        const projection = bootstrapResult.bootstrapped
+          ? (bootstrapResult.result?.generation ?? null)
+          : await ensureCanonicalArchiveProjection({ pairing, client });
+        if (projection) {
+          resetDatabaseManager();
+          await initializeBrowserSafety({ force: true, acknowledgeCacheReset: true });
+        }
+      } catch (error) {
+        if (browserSourcePresent) {
+          console.warn(
+            '[twitter-web-exporter] browser archive bootstrap deferred; existing cache preserved',
+            error,
+          );
+        } else {
+          console.warn('[twitter-web-exporter] canonical archive reconstruction deferred', error);
+        }
+      }
+    }
+  }
+
   installUserscriptErrorGuard();
   initializePerformanceMonitoring();
+
+  const browserSafety = await initializeBrowserSafety();
+  if (browserSafety.phase === 'recovery_required') {
+    mountWhenReady();
+    return;
+  }
+
   installSyntheticDatabaseTools();
 
   try {
@@ -186,11 +282,7 @@ function bootstrap() {
     }, 250);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountApp);
-  } else {
-    mountApp();
-  }
+  mountWhenReady();
 }
 
-bootstrap();
+void bootstrap();

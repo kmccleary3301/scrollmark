@@ -6,9 +6,30 @@ import { ControlPanelLauncher } from './control-panel-launcher';
 import { ControlPanelShell } from './control-panel-shell';
 import { BundleViewerPanel } from '@/components/bundles/bundle-viewer-panel';
 import { compareWidgetExtensions, isBottomUtilityWidget } from './widget-presentation';
+import { BrowserRecoveryGate } from '@/components/durability/browser-recovery-gate';
+import { browserSafetyState, initializeBrowserSafety } from './durability/browser-safety';
 
 export function App() {
+  const browserSafety = browserSafetyState.value;
+  if (browserSafety.phase === 'recovery_required') {
+    return (
+      <BrowserRecoveryGate
+        snapshot={browserSafety}
+        onRetry={async () => {
+          const next = await initializeBrowserSafety({ force: true });
+          if (next.phase !== 'recovery_required') {
+            window.location.reload();
+          }
+        }}
+      />
+    );
+  }
+  return <ArchiveApp />;
+}
+
+function ArchiveApp() {
   const { t } = useTranslation();
+  const persistence = browserSafetyState.value;
 
   const {
     extensions,
@@ -95,6 +116,7 @@ export function App() {
         );
   })();
 
+  const persistenceLine = `Persistence: ${persistence.persistence?.state || 'unknown'} | continuity: ${persistence.phase} (${persistence.reason})`;
   const sortedExtensions = extensions.value.slice().sort(compareWidgetExtensions);
   const primaryExtensions = sortedExtensions.filter((ext) => !isBottomUtilityWidget(ext));
   const bottomExtensions = sortedExtensions.filter(isBottomUtilityWidget);
@@ -121,6 +143,7 @@ export function App() {
         description={t('Browse around to capture more data.')}
         hookLine={hookLine}
         healthLine={healthLine}
+        persistenceLine={persistenceLine}
         onToggle={toggleControlPanel}
       >
         <ErrorBoundary>

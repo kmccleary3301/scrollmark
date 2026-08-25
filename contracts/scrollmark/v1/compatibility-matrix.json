@@ -1,0 +1,73 @@
+{
+  "format": "scrollmark.compatibility-matrix.v1",
+  "matrix_revision": "1.0.0",
+  "protocol": {
+    "major": 1,
+    "minor_min": 0,
+    "minor_max": 0,
+    "required_header": "X-Scrollmark-Protocol",
+    "hash_algorithm": "sha256-jcs-hex"
+  },
+  "canonical_schema": {
+    "current_revision": 1,
+    "accepted_revisions": [1],
+    "unknown_major_action": "fail_closed",
+    "unknown_required_field_action": "fail_closed",
+    "unknown_optional_field_action": "ignore"
+  },
+  "clients": [
+    {
+      "name": "browser-userscript",
+      "min_protocol": { "major": 1, "minor": 0 },
+      "max_protocol": { "major": 1, "minor": 0 },
+      "schema_revisions": [1]
+    },
+    {
+      "name": "companion-reference",
+      "min_protocol": { "major": 1, "minor": 0 },
+      "max_protocol": { "major": 1, "minor": 0 },
+      "schema_revisions": [1]
+    }
+  ],
+  "limits": {
+    "max_mutations_per_batch": 4096,
+    "max_request_bytes": 8388608,
+    "max_response_bytes": 16777216,
+    "max_reconciliation_items_per_page": 4096,
+    "max_reconciliation_bytes_per_page": 8388608,
+    "max_stream_pages": 4096,
+    "max_stream_lifetime_ms": 900000,
+    "retained_journal_window": 1000000
+  },
+  "features": {
+    "entity_upsert": true,
+    "relationship_upsert": true,
+    "enrichment_upsert": true,
+    "semantic_tombstone": true,
+    "delta_reconciliation": true,
+    "state_bootstrap": true,
+    "idempotent_receipts": true,
+    "encrypted_snapshots": false,
+    "direct_messages": false
+  },
+  "error_codes": [
+    "protocol_version_unsupported",
+    "auth_required",
+    "origin_denied",
+    "archive_binding_mismatch",
+    "namespace_not_active",
+    "identity_required",
+    "client_epoch_unknown",
+    "client_sequence_gap",
+    "batch_hash_mismatch",
+    "mutation_hash_conflict",
+    "validation_failed",
+    "checkpoint_mismatch",
+    "checkpoint_expired",
+    "stream_expired",
+    "limit_exceeded",
+    "companion_busy",
+    "companion_unavailable",
+    "internal_commit_unknown"
+  ]
+}

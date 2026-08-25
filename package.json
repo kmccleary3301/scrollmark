@@ -50,7 +50,18 @@
     "test:twitter-article-dom": "node e2e/twitter_article_dom_harness.mjs",
     "commitlint": "commitlint --edit",
     "changelog": "git-cliff -o CHANGELOG.md",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:browser-safety-shell": "tsx e2e/perf/browser_safety_shell_harness.ts",
+    "test:browser-safety-shell-smoke": "node e2e/perf/browser_safety_shell_smoke.mjs",
+    "test:neutral-contracts": "python3 contracts/scrollmark/v1/harness.py",
+    "test:durability-coordinator": "tsx e2e/perf/durability_coordinator_harness.ts",
+    "test:generation-rebuild": "tsx e2e/perf/generation_rebuild_harness.ts",
+    "test:companion-bundle-bridge": "tsx e2e/perf/companion_bundle_bridge_harness.ts",
+    "test:snapshot-recovery-browser": "tsx e2e/perf/snapshot_recovery_browser_harness.ts",
+    "test:durability-scale": "tsx e2e/perf/durability_scale_harness.ts",
+    "test:reconciliation-manifest": "tsx e2e/perf/reconciliation_manifest_harness.ts",
+    "test:persistent-profile-recovery": "tsx e2e/perf/persistent_profile_recovery_harness.ts",
+    "release:durability": "python3 scripts/durability_release.py"
   },
   "dependencies": {
     "@preact/signals": "2.0.0",

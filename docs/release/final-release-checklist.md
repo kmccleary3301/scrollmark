@@ -31,6 +31,20 @@
 - [ ] Script store README/screenshots updated.
 - [ ] Final README screenshots refreshed after manual QC if current screenshots no longer represent the release UI.
 
+## Canonical Archive Durability Gates
+
+- [x] Neutral protocol contracts and independent oracles: `npm run test:neutral-contracts`
+- [x] Authenticated SQLite companion, receipts, replay, and reconciliation: `python3 -m scrollmark_companion.harness`
+- [x] Browser identity/outbox coordinator: `npm run test:durability-coordinator`
+- [x] Verified browser generation rebuild, partial repair, and same-count corruption detection: `npm run test:generation-rebuild`
+- [x] Snapshot/restore, browser recovery, and read-only companion bundle bridge gates pass.
+- [x] Disposable persistent-profile deletion/rebuild/restart drill passes.
+- [x] Real macOS LaunchAgent, `0600` token, Keychain snapshot, re-pair, and non-destructive uninstall drill passes.
+- [x] Browser 40k/80k and companion 57,500-item scale gates pass without truncation or hidden fallback.
+- [x] `npm run release:durability` rebuilds current artifacts, recreates G1–G8 evidence, validates semantic gates and schemas, and scores 100/100.
+
+Latest verified durability source revision: `working-tree-sha256:bef0e5e01e1ee05ebf4af4c753fab100a3824d5e73309ec7e820c63fddecbfc3`.
+
 ## DB-Backed Table Rewrite Gates
 
 Run these before publishing a release that includes the DB-backed table rewrite.

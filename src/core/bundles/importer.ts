@@ -2,12 +2,14 @@ import packageJson from '@/../package.json';
 import {
   BundleManifest,
   BundleRecordEnvelope,
+  CompanionSourceMetadata,
   ImportedBundle,
   ImportedBundleCollection,
   ImportedBundleImportReport,
   ImportedBundleItem,
   ImportedEntitySnapshot,
 } from './schema';
+import { sha256Hex } from './ids';
 import { decodeBundleTextEntry, readBundleZip } from './zip';
 import { validateBundleManifest, validateBundleRecordEnvelope } from './validation';
 
@@ -69,7 +71,11 @@ function extractSearchText(record: BundleRecordEnvelope): string {
   return parts.join('\n');
 }
 
-function buildImportedBundle(manifest: BundleManifest, now: number): ImportedBundle {
+function buildImportedBundle(
+  manifest: BundleManifest,
+  now: number,
+  companionSource?: CompanionSourceMetadata,
+): ImportedBundle {
   return {
     id: manifest.id,
     title: manifest.title,
@@ -83,6 +89,7 @@ function buildImportedBundle(manifest: BundleManifest, now: number): ImportedBun
     recordCount: manifest.counts.records,
     mediaBlobCount: manifest.counts.mediaBlobs,
     manifest,
+    companionSource,
   };
 }
 
@@ -105,6 +112,37 @@ export async function importBundleZip(
     [...entries.keys()].find((path) => path.endsWith('.jsonl'));
   if (!recordsPath) {
     throw new Error('Bundle is missing a records JSONL file.');
+  }
+
+  let companionSource: CompanionSourceMetadata | undefined;
+  const companionSourceFile = manifest.files.find(
+    (file) => file.path === 'metadata/companion-source.json' && file.role === 'metadata',
+  );
+  if (companionSourceFile) {
+    const text = decodeBundleTextEntry(entries, companionSourceFile.path);
+    const bytes = new TextEncoder().encode(text).byteLength;
+    if (
+      companionSourceFile.bytes !== bytes ||
+      typeof companionSourceFile.sha256 !== 'string' ||
+      (await sha256Hex(text)) !== companionSourceFile.sha256
+    ) {
+      throw new Error('Companion source metadata integrity proof is invalid.');
+    }
+    const value = JSON.parse(text) as CompanionSourceMetadata;
+    if (
+      value.format !== 'scrollmark.companion-source.v1' ||
+      value.bridgeRevision !== 1 ||
+      value.privacy?.visibility !== 'shared_safe' ||
+      value.privacy?.rawIdentifiersExcludedFromMetadata !== true ||
+      value.privacy?.privateMessagesExcluded !== true ||
+      !/^[0-9a-f]{64}$/.test(value.archiveFingerprint) ||
+      !/^[0-9a-f]{64}$/.test(value.namespaceFingerprint) ||
+      !/^[0-9a-f]{64}$/.test(value.canonicalStateManifestHash) ||
+      !/^[0-9a-f]{64}$/.test(value.checkpoint?.chainHash)
+    ) {
+      throw new Error('Companion source metadata contract is invalid.');
+    }
+    companionSource = value;
   }
 
   const reportId = `${manifest.id}:import:${now}`;
@@ -194,6 +232,7 @@ export async function importBundleZip(
           },
         },
         now,
+        companionSource,
       ),
       collections: [defaultCollection],
       items,

@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrollmark.local/schemas/snapshot-manifest-v1.json",
+  "title": "Scrollmark Companion Snapshot Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "manifest_version",
+    "protocol_version",
+    "schema_revision",
+    "archive_id",
+    "snapshot_id",
+    "created_at_ms",
+    "source_companion_instance_id",
+    "namespaces",
+    "tables",
+    "image",
+    "media",
+    "encryption",
+    "verified_at_ms",
+    "verification",
+    "manifest_payload_hash"
+  ],
+  "properties": {
+    "format": { "const": "twe.snapshot.v1" },
+    "manifest_version": { "const": 1 },
+    "protocol_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": { "major": { "const": 1 }, "minor": { "type": "integer", "minimum": 0 } }
+    },
+    "schema_revision": { "const": 1 },
+    "archive_id": { "type": "string", "minLength": 1 },
+    "snapshot_id": { "type": "string", "pattern": "^snapshot-[A-Za-z0-9._-]+$" },
+    "created_at_ms": { "type": "integer", "minimum": 0 },
+    "source_companion_instance_id": { "type": "string", "minLength": 1 },
+    "namespaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace_id",
+          "identity_fingerprint",
+          "schema_revision",
+          "state",
+          "journal_first_seq",
+          "journal_last_seq",
+          "checkpoint_seq",
+          "checkpoint_chain_hash",
+          "retained_from"
+        ],
+        "properties": {
+          "namespace_id": { "type": "string", "minLength": 1 },
+          "identity_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{24}$" },
+          "schema_revision": { "const": 1 },
+          "state": { "type": "string" },
+          "journal_first_seq": { "type": "integer", "minimum": 0 },
+          "journal_last_seq": { "type": "integer", "minimum": 0 },
+          "checkpoint_seq": { "type": "integer", "minimum": 0 },
+          "checkpoint_chain_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "retained_from": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["table", "schema_id", "row_count", "canonical_bytes", "sha256"],
+        "properties": {
+          "table": { "type": "string", "minLength": 1 },
+          "schema_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "row_count": { "type": "integer", "minimum": 0 },
+          "canonical_bytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256", "mode"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "mode": { "enum": ["plaintext", "aes-256-gcm"] }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "reference_count", "mirrored_blob_count", "missing_count", "manifest_hash"],
+      "properties": {
+        "mode": { "const": "references_only" },
+        "reference_count": { "type": "integer", "minimum": 0 },
+        "mirrored_blob_count": { "type": "integer", "minimum": 0 },
+        "missing_count": { "type": "integer", "minimum": 0 },
+        "manifest_hash": { "type": ["string", "null"] }
+      }
+    },
+    "encryption": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "algorithm", "key_id"],
+          "properties": {
+            "mode": { "const": "plaintext" },
+            "algorithm": { "type": "null" },
+            "key_id": { "type": "null" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "algorithm", "key_id", "aad", "key_storage"],
+          "properties": {
+            "mode": { "const": "aes-256-gcm" },
+            "algorithm": { "const": "AES-256-GCM" },
+            "key_id": { "type": "string", "minLength": 1 },
+            "aad": { "type": "string", "minLength": 1 },
+            "key_storage": { "enum": ["macos-keychain", "external-provider"] }
+          }
+        }
+      ]
+    },
+    "verified_at_ms": { "type": "integer", "minimum": 0 },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "verifier_version", "checks", "failures"],
+      "properties": {
+        "state": { "const": "verified" },
+        "verifier_version": { "type": "string", "minLength": 1 },
+        "checks": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "failures": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "manifest_payload_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -5,6 +5,9 @@ import {
   exportCanonicalBundleZipWithWorker,
   type BundleExportWorkerJob,
 } from '@/core/bundles/export-worker-client';
+import { createCompanionNamespaceBundle } from '@/core/bundles/companion-bridge';
+import { CompanionClient } from '@/core/durability/companion-client';
+import { readPairingContext } from '@/core/durability/identity';
 import { TranslationKey, useTranslation } from '@/i18n';
 import { nowMs, recordPerfMetric } from '@/core/perf/metrics';
 import { extractStableRecordId, ResultSetSnapshot } from '@/utils/result-set';
@@ -15,6 +18,7 @@ import {
   ExportFormatType,
   exportData,
   exportDataFromAsyncRows,
+  saveFile,
 } from '@/utils/exporter';
 import { options } from '@/core/options';
 import {
@@ -245,6 +249,7 @@ export function ExportDataModal<T>({
   onClose,
 }: ExportDataModalProps<T>) {
   const { t } = useTranslation('exporter');
+  const companionPairing = readPairingContext();
 
   const [selectedFormat, setSelectedFormat] = useSignalState<ExportFormatType>(EXPORT_FORMAT.JSON);
   const [loading, setLoading] = useSignalState(false);
@@ -634,6 +639,42 @@ export function ExportDataModal<T>({
     }
   };
 
+  const onExportCompanionBundle = async () => {
+    if (!companionPairing || bundleLoading) return;
+    const abortController = new AbortController();
+    bundleAbortRef.current = abortController;
+    setBundleLoading(true);
+    setCurrentProgress(0);
+    setTotalProgress(0);
+    try {
+      const result = await createCompanionNamespaceBundle({
+        pairing: companionPairing,
+        client: new CompanionClient(companionPairing),
+        title: `${title} canonical namespace`,
+        description: 'Read-only export from the paired Scrollmark companion canonical namespace.',
+        compressionLevel: bundleCompressionLevel,
+        signal: abortController.signal,
+      });
+      if (abortController.signal.aborted) return;
+      const blobBytes = result.bytes.buffer.slice(
+        result.bytes.byteOffset,
+        result.bytes.byteOffset + result.bytes.byteLength,
+      ) as ArrayBuffer;
+      saveFile(result.filename, new Blob([blobBytes], { type: 'application/zip' }));
+      setCurrentProgress(result.companionSource.records.total);
+      setTotalProgress(result.companionSource.records.total);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/cancelled/i.test(message)) {
+        console.error('[twitter-web-exporter] Failed to export canonical companion bundle.', error);
+      }
+    } finally {
+      bundleJobRef.current = null;
+      bundleAbortRef.current = null;
+      setBundleLoading(false);
+    }
+  };
+
   const onCancel = () => {
     if (loading) {
       exportAbortRef.current?.abort();
@@ -910,7 +951,7 @@ export function ExportDataModal<T>({
           />
           <span>{t('Include original record metadata in bundle:')}</span>
         </label>
-        {activeSourceCount > 0 ? null : (
+        {activeSourceCount > 0 || companionPairing ? null : (
           <div class="flex items-center justify-center h-28 w-full">
             <p class="text-base-content text-opacity-50">{t('No data selected.')}</p>
           </div>
@@ -923,7 +964,7 @@ export function ExportDataModal<T>({
             max="100"
           />
           <span class="text-sm leading-none mt-2 text-base-content text-opacity-60">
-            {`${currentProgress}/${activeSourceCount}`}
+            {`${currentProgress}/${totalProgress || activeSourceCount}`}
           </span>
         </div>
       </div>
@@ -940,6 +981,19 @@ export function ExportDataModal<T>({
         >
           {bundleLoading && <span class="loading loading-spinner" />}
           {t('Export Bundle ZIP')}
+        </button>
+        <button
+          class={cx('btn btn-info', (bundleLoading || !companionPairing) && 'btn-disabled')}
+          disabled={bundleLoading || !companionPairing}
+          onClick={onExportCompanionBundle}
+          title={
+            companionPairing
+              ? t('Export the paired canonical namespace as a verified shared-safe bundle.')
+              : t('Pair a local companion to export its canonical namespace.')
+          }
+        >
+          {bundleLoading && <span class="loading loading-spinner" />}
+          {t('Export Companion Namespace')}
         </button>
         <button
           class={cx('btn btn-primary', (loading || !canExport) && 'btn-disabled')}

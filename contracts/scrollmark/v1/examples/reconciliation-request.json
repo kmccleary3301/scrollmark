@@ -1,0 +1,13 @@
+{
+  "protocol": { "major": 1, "minor": 0 },
+  "request_id": "req-reconcile-1",
+  "archive_id": "archive-demo",
+  "namespace_id": "namespace-alpha",
+  "client_id": "client-demo",
+  "client_epoch": "epoch-1",
+  "sent_at_ms": 1700000001000,
+  "mode": "state_bootstrap",
+  "after_checkpoint": null,
+  "known_checkpoint": null,
+  "page_hint": 256
+}

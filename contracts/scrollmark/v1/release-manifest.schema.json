@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrollmark.local/contracts/scrollmark/v1/release-manifest.schema.json",
+  "title": "Scrollmark Artifact-Pinned Release Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "release_id",
+    "source_revision",
+    "userscript",
+    "companion",
+    "contracts",
+    "migration",
+    "snapshot_manifest",
+    "supported_clients"
+  ],
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "release_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source_revision": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "userscript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "artifact_sha256", "metadata_sha256"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "metadata_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "companion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "runtime", "artifact_sha256"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "runtime": { "type": "string", "minLength": 1 },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_major", "protocol_minor", "canonical_schema_revision", "matrix_sha256"],
+      "properties": {
+        "protocol_major": { "const": 1 },
+        "protocol_minor": { "const": 0 },
+        "canonical_schema_revision": { "const": 1 },
+        "matrix_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matrix_revision", "matrix_sha256"],
+      "properties": {
+        "matrix_revision": { "type": "string", "minLength": 1 },
+        "matrix_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "snapshot_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "schema_sha256"],
+      "properties": {
+        "revision": { "type": "string", "minLength": 1 },
+        "schema_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "supported_clients": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "min_version", "max_version"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "min_version": { "type": "string", "minLength": 1 },
+          "max_version": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "evidence_card_schema_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

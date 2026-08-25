@@ -31,8 +31,9 @@ import {
 } from '@/utils/diagnostics';
 import { exportDiagnosticsBundleZip } from '@/modules/runtime-logs/diagnostics-bundle';
 
-import { db } from './database';
+import { db, getDurabilityStatus } from './database';
 import { collectIndexedDbInventory } from './database/inventory';
+import { clearBrowserCache } from './durability/browser-safety';
 import extensionManager, { ExtensionType } from './extensions';
 import { DEFAULT_APP_OPTIONS, options, THEMES } from './options';
 
@@ -633,15 +634,38 @@ export function Settings() {
                 {t('QC Session')}
               </button>
               <button
+                class={cx(styles.wrapButton, 'btn-success')}
+                onClick={() => {
+                  const status = getDurabilityStatus();
+                  alert(
+                    `Companion durability status\n\n${JSON.stringify(status, undefined, '  ')}`,
+                  );
+                }}
+              >
+                <IconReportAnalytics size={20} />
+                Durability status
+              </button>
+              <button
                 class={cx(styles.wrapButton, 'btn-warning')}
                 onClick={async () => {
-                  if (confirm(t('Are you sure to clear all data in the database?'))) {
-                    await db.clear();
+                  const confirmation = window.prompt(
+                    'This clears the disposable browser cache. Type CLEAR BROWSER CACHE to continue.',
+                  );
+                  if (confirmation === 'CLEAR BROWSER CACHE') {
+                    await clearBrowserCache();
                   }
                 }}
               >
                 <IconTrashX size={20} />
-                {t('Clear DB')}
+                Clear browser cache
+              </button>
+              <button
+                class={cx(styles.wrapButton, 'btn-disabled')}
+                disabled
+                title="Requires the local companion archive"
+              >
+                <IconTrashX size={20} />
+                Destroy durable archive
               </button>
             </div>
           </div>
